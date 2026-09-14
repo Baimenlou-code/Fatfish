@@ -106,9 +106,9 @@ def __getattr__(name):
         return get_workspace()
     raise AttributeError(name)
 
-# ============ 常量 ============
-MAX_READ_BYTES = 200 * 1024
-MAX_READ_CHARS = 50_000
+# ============ 常量（已整体放宽）============
+MAX_READ_BYTES = 5 * 1024 * 1024   # 单文件读取上限：5MB（原 200KB）
+MAX_READ_CHARS = 1_000_000         # 单文件读取字符上限：100 万（原 5 万）
 
 def _log(msg):
     logging.info(msg)
@@ -214,7 +214,7 @@ def _rel(path):
         return path
 
 # ============ 工具实现 ============
-def ws_list(path="", depth=3, max_entries=200):
+def ws_list(path="", depth=3, max_entries=2000):
     """列出工作台内目录树。"""
     try:
         p = _safe_path(path)
@@ -388,7 +388,7 @@ def ws_mkdir(path):
     os.makedirs(p, exist_ok=True)
     return True, f"已创建目录 {_rel(p)}"
 
-def ws_search(keyword, path="", max_hits=50):
+def ws_search(keyword, path="", max_hits=500):
     """在工作台内全文搜索关键词。"""
     try:
         p = _safe_path(path)
@@ -615,7 +615,7 @@ TOOL_SCHEMAS = [
                 "properties": {
                     "command": {"type": "string", "description": "要执行的命令，例如 'dir' 或 'python --version'"},
                     "cwd": {"type": "string", "description": "相对工作台的子目录，默认工作台根目录"},
-                    "timeout": {"type": "integer", "description": "超时秒数，默认 30，最大 300"},
+                    "timeout": {"type": "integer", "description": "超时秒数，默认 120，最大 1800"},
                 },
                 "required": ["command"],
             },
@@ -635,7 +635,7 @@ TOOL_SCHEMAS = [
                 "properties": {
                     "code": {"type": "string", "description": "完整的 Python 代码"},
                     "cwd": {"type": "string", "description": "相对工作台的子目录，默认工作台根目录"},
-                    "timeout": {"type": "integer", "description": "超时秒数，默认 30，最大 300"},
+                    "timeout": {"type": "integer", "description": "超时秒数，默认 120，最大 1800"},
                     "filename": {"type": "string", "description": "可选，临时脚本文件名（便于 traceback 识别）"},
                 },
                 "required": ["code"],
@@ -658,8 +658,8 @@ _DISPATCH = {
     "ws_mkdir":   lambda a: ws_mkdir(a["path"]),
     "ws_search":  lambda a: ws_search(a["keyword"], a.get("path", "")),
     "ws_forget":  lambda a: ws_forget(a.get("path", "")),
-    "ws_run_cmd":    lambda a: ws_run_cmd(a["command"], a.get("cwd", ""), a.get("timeout", 30)),
-    "ws_run_python": lambda a: ws_run_python(a["code"], a.get("cwd", ""), a.get("timeout", 30), a.get("filename", "")),
+    "ws_run_cmd":    lambda a: ws_run_cmd(a["command"], a.get("cwd", ""), a.get("timeout", 120)),
+    "ws_run_python": lambda a: ws_run_python(a["code"], a.get("cwd", ""), a.get("timeout", 120), a.get("filename", "")),
 }
 
 def call_tool(name, args):

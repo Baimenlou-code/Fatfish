@@ -1,0 +1,45 @@
+# ============================================================
+#  FatFish .gitignore
+#  原则：入库「人写的源码与文档」，排除「环境 / 产物 / 隐私」
+#  维护：新增产物目录时，记得同步加到这里
+# ============================================================
+
+# ---- ① 隐私与密钥（绝不入库）----
+.env
+.env.*
+!.env.example
+
+# ---- ② Python 运行环境（本机自建，别人 pip install 即可）----
+venv/
+.venv/
+env/
+ENV/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+
+# ---- ③ 运行时数据（本机产生，不该共享）----
+logs/
+chat_logs/
+generated_code/
+.fatfish_tmp/
+_fatfish_pid.txt
+*.log
+
+# ---- ④ 打包/安装器产物（由 make_fatpack.py 生成，可再生产）----
+#      需要发布时走 GitHub Releases，不塞进源码树
+FATPACK*.bat
+FATPACK*.cmd
+FATPACK*.exe
+fatpack_out/
+dist/
+build/
+
+# ---- ⑤ 本地历史与备份（留在磁盘，但不入库）----
+oldver/
+_backup/
+workspaceX/
+*.bak

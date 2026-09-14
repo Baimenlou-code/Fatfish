@@ -1,5 +1,6 @@
 import os
 import re
+import base64
 import logging
 from datetime import datetime
 
@@ -8,6 +9,11 @@ MAX_BYTES     = 200 * 1024      # 单文件最大字节数
 MAX_CHARS     = 50_000          # 单文件最大字符数（超出截断）
 MAX_DIR_FILES = 20              # 目录最多读取文件数
 
+# ---- 图片相关阈值 ----
+MAX_IMAGE_BYTES       = 32 * 1024 * 1024   # 单张图片最大 32 MiB（API 硬限制）
+MAX_IMAGES_PER_MSG    = 5                  # 单条消息最多几张图
+MAX_TOTAL_IMAGE_BYTES = 60 * 1024 * 1024   # 单条消息图片总字节上限（base64 前）
+
 TEXT_EXTS = {
     ".py", ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg",
     ".js", ".ts", ".jsx", ".tsx", ".html", ".css", ".scss", ".vue",
@@ -15,6 +21,70 @@ TEXT_EXTS = {
     ".c", ".cpp", ".h", ".hpp", ".java", ".go", ".rs", ".rb", ".php",
     ".sql", ".csv", ".log", ".xml", ".env",
 }
+
+# ============ 图片支持 ============
+# 支持的图片扩展名（仅用于快速初筛，最终以文件实际内容为准）
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+
+def is_image_path(path):
+    """按扩展名快速判断是否可能是图片。"""
+    return os.path.splitext(str(path))[1].lower() in IMAGE_EXTS
+
+def sniff_image_mime(head):
+    """按文件头魔数判断真实图片格式，返回 mime 或 None。
+
+    文档要求：格式由文件实际内容判断，而非文件名或 MIME 声明。
+    """
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if head.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if head.startswith(b"GIF87a") or head.startswith(b"GIF89a"):
+        return "image/gif"
+    # WebP: RIFF....WEBP
+    if len(head) >= 12 and head[0:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+def load_image(path):
+    """读取图片并编码为 OpenAI 兼容的 image_url 内容块。
+
+    返回 (ok, block_or_err, raw_size)：
+      ok=True  → block 为 {"type": "image_url", "image_url": {...}}，
+                 raw_size 为原始字节数（供调用方累计总量）
+      ok=False → block 为错误说明字符串，raw_size 为 0
+    """
+    p = normalize_path(path)
+    if not p:
+        return False, "路径为空", 0
+    if not os.path.exists(p):
+        return False, "文件不存在", 0
+    if os.path.isdir(p):
+        return False, "这是一个目录", 0
+
+    try:
+        size = os.path.getsize(p)
+    except OSError as e:
+        return False, f"无法获取文件大小：{e}", 0
+    if size > MAX_IMAGE_BYTES:
+        return False, (f"图片过大（{size} 字节 > {MAX_IMAGE_BYTES} 字节），"
+                       f"已跳过"), 0
+
+    try:
+        with open(p, "rb") as f:
+            raw = f.read()
+    except OSError as e:
+        return False, f"读取失败：{e}", 0
+
+    mime = sniff_image_mime(raw[:16])
+    if not mime:
+        return False, "不是受支持的图片格式（JPEG/PNG/GIF/WebP）", 0
+
+    b64 = base64.b64encode(raw).decode("ascii")
+    return True, {
+        "type": "image_url",
+        "image_url": {"url": f"data:{mime};base64,{b64}"},
+    }, size
 
 # ============ 日志（复用主模块的 logging，若未配置则静默）============
 def _log(msg):
@@ -235,13 +305,47 @@ def extract_file_refs(text):
 
 # ============ 批量加载 ============
 def load_files(paths, recursive=False):
-    """读取一批路径（文件或目录），返回 (合并文本, 成功列表, 失败列表)。"""
+    """读取一批路径（文件或目录）。
+
+    返回 (合并文本, 成功列表, 失败列表, 图片块列表)。
+    图片块列表元素为 OpenAI 兼容的 image_url 内容块。
+    图片软闸：单图 >MAX_IMAGE_BYTES、张数 >MAX_IMAGES_PER_MSG、
+              总量 >MAX_TOTAL_IMAGE_BYTES 时跳过并记入失败列表。
+    """
     blocks, ok_list, err_list = [], [], []
+    image_blocks = []          # 收集图片块
+    total_img_bytes = 0        # 累计图片原始字节数（base64 前）
 
     for raw in paths:
         p = normalize_path(raw)
         if not p:
             err_list.append((raw, "路径为空"))
+            continue
+
+        # ---- 图片走独立分支（不当作文本读）----
+        if os.path.isfile(p) and is_image_path(p):
+            # 软闸 1：张数上限
+            if len(image_blocks) >= MAX_IMAGES_PER_MSG:
+                err_list.append(
+                    (p, f"图片数量超过单条上限 {MAX_IMAGES_PER_MSG} 张，已跳过"))
+                _log(f"[{_ts()}] 图片张数超限，跳过：{p}")
+                continue
+            ok, res, size = load_image(p)
+            if not ok:
+                err_list.append((p, res))
+                _log(f"[{_ts()}] 图片读取失败 {p}：{res}")
+                continue
+            # 软闸 2：总量上限
+            if total_img_bytes + size > MAX_TOTAL_IMAGE_BYTES:
+                err_list.append(
+                    (p, f"图片总量超过单条上限 "
+                        f"{MAX_TOTAL_IMAGE_BYTES} 字节，已跳过"))
+                _log(f"[{_ts()}] 图片总量超限，跳过：{p}")
+                continue
+            image_blocks.append(res)
+            total_img_bytes += size
+            ok_list.append(f"{p}（图片）")
+            _log(f"[{_ts()}] 已读取图片：{p}（{size} 字节）")
             continue
 
         if os.path.isdir(p):
@@ -266,4 +370,19 @@ def load_files(paths, recursive=False):
             err_list.append((p, data))
             _log(f"[{_ts()}] 文件读取失败 {p}：{data}")
 
-    return "\n\n".join(blocks), ok_list, err_list
+    return "\n\n".join(blocks), ok_list, err_list, image_blocks
+
+
+def build_content(text, image_blocks=None):
+    """把文本与图片块组装成模型可用的 content。
+
+    - 无图片 → 返回纯字符串（与旧行为完全一致）
+    - 有图片 → 返回块数组 [{"type":"text",...}, {"type":"image_url",...}, ...]
+    """
+    if not image_blocks:
+        return text
+    content = []
+    if text:
+        content.append({"type": "text", "text": text})
+    content.extend(image_blocks)
+    return content
