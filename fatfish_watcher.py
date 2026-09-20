@@ -4,7 +4,7 @@
 fatfish_watcher.py —— 肥鱼「子程序输出监控器」
 
 用途：
-    与主程序（FATGFISH.py）并行运行，独立黑窗口，专门实时滚动显示
+    与主程序（FATHFISH.py）并行运行，独立黑窗口，专门实时滚动显示
     exec_tools.py 跑起来的 CMD / Python 程序的输出。
 
     换句话说：这个窗口就是「exec_tools 子程序输出的实时镜子」。
@@ -61,16 +61,21 @@ DRAIN_INTERVAL = 1.0       # 每轮 drain 的间隔（秒）
 _CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
 
-def _ts():
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+# ---------- 时间戳 / 日期分层目录（统一来自 common.py）----------
+try:
+    from common import ts as _ts, dated_dir as _dated_dir
+except ImportError:               # common.py 缺失时退回本地实现，保持自足
+    def _ts():
+        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    def _dated_dir(root):
+        now = datetime.now()
+        d = os.path.join(root, f"{now:%Y}", f"{now:%m}", f"{now:%d}")
+        os.makedirs(d, exist_ok=True)
+        return d
 
 
 # ---------- 日志 ----------
-def _dated_dir(root):
-    now = datetime.now()
-    d = os.path.join(root, f"{now:%Y}", f"{now:%m}", f"{now:%d}")
-    os.makedirs(d, exist_ok=True)
-    return d
 
 
 class Logger:
@@ -117,10 +122,38 @@ class ExecTailer:
       - 文件被删除 / 目录不存在时静默跳过
     """
 
-    def __init__(self, root="logs"):
+    def __init__(self, root="logs", from_now=True):
         self.root = root
         self._offsets = {}          # path -> 已读字节数
         self._announced = set()     # 已打印过「开始输出」标题的文件
+        if from_now:
+            self._prime()           # 启动基线：只跟新增，不回放历史
+
+    def _prime(self):
+        """启动基线：把「启动时已存在」的 exec_*.out 的当前大小记为起点。
+
+        若不做这一步，_offsets 在每次冷启动时都是空的，poll() 会把这些
+        历史文件整体当成「新内容」从头回放（并逐行写进新的 watcher 日志），
+        表现为「每次启动先把上一轮的子程序输出再滚一遍」。
+
+        做了之后语义等价于 tail -f：只跟启动之后新增的字节。
+        启动后新建的文件起始 size 为 0，不受影响，仍会完整实时跟随。
+        """
+        for d in self._today_dirs():
+            if not os.path.isdir(d):
+                continue
+            try:
+                names = os.listdir(d)
+            except OSError:
+                continue
+            for name in names:
+                if not (name.startswith("exec_") and name.endswith(".out")):
+                    continue
+                path = os.path.join(d, name)
+                try:
+                    self._offsets[path] = os.path.getsize(path)
+                except OSError:
+                    pass
 
     def _today_dirs(self):
         """返回今天（以及昨天，防止跨零点）的 exec 输出目录列表。"""

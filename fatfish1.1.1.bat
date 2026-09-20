@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title 肥鱼启动器 v1.0.4 ^| FatFish Launcher v1.0.4 ^| 肥魚起動器 v1.0.4 ^| 팻피시 기동기 v1.0.4
+title 肥鱼启动器 v1.1.1 ^| FatFish Launcher v1.1.1 ^| 肥魚起動器 v1.1.1 ^| 팻피시 기동기 v1.1.1
 cd /d "%~dp0"
 
 REM ============================================================
@@ -80,10 +80,10 @@ REM     start 的第一个引号参数是【窗口标题】，其后才是要执
 REM     若命令内部再含引号（如 call "路径"），必须用额外的外层引号
 REM     把整条命令括起来，否则含空格的路径会被截断 → 新窗口闪退。
 REM ============================================================
-set "FISHWIN=FatFish Runtime v1.0.4"
+set "FISHWIN=FatFish Runtime v1.1.1"
 
 echo.
-echo 🐟 正在新窗口中启动肥鱼 v1.0.4... ^| Starting FatFish v1.0.4 in a new window... ^| 新しいウィンドウで肥魚 v1.0.4 を起動中... ^| 새 창에서 팻피시 v1.0.4 기동 중...
+echo 🐟 正在新窗口中启动肥鱼 v1.1.1... ^| Starting FatFish v1.1.1 in a new window... ^| 新しいウィンドウで肥魚 v1.1.1 を起動中... ^| 새 창에서 팻피시 v1.1.1 기동 중...
 echo    主程序运行窗口标题 [runtime window title]：%FISHWIN%
 echo    主程序窗口独立运行：结束后需按任意键才关闭 [runtime window is standalone: press any key to close after it ends]
 echo.

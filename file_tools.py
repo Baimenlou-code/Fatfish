@@ -90,8 +90,11 @@ def load_image(path):
 def _log(msg):
     logging.info(msg)
 
-def _ts():
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+try:
+    from common import ts as _ts
+except ImportError:               # common.py 缺失时退回本地实现，保持自足
+    def _ts():
+        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 # ============ 文件缓存 ============
 _FILE_CACHE = {}

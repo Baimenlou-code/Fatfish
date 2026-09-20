@@ -113,8 +113,11 @@ MAX_READ_CHARS = 1_000_000         # 单文件读取字符上限：100 万（原
 def _log(msg):
     logging.info(msg)
 
-def _ts():
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+try:
+    from common import ts as _ts
+except ImportError:               # common.py 缺失时退回本地实现，保持自足
+    def _ts():
+        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 # ============ 读过凭证（会话级）============
 # path -> (mtime, size)  表示"本会话内已确认读过该文件"
@@ -212,6 +215,60 @@ def _rel(path):
         return os.path.relpath(path, get_workspace())
     except ValueError:
         return path
+
+# ============ 敏感文件守护（只读免审的前提）============
+# 2026-09-19 新增。
+# 背景：文件读取类操作（ws_read）本身零副作用，遂从「人工报批名单」中移除，
+#       以降低高频人工确认。但"只读"并不等于"无风险"——读出来的内容会进入
+#       模型上下文，等同于把文件内容送到外部服务。因此凡属「读取即泄露」的
+#       文件，必须恢复人工确认（并在核验侧强制送审）。
+#
+# 设计原则：
+#   · 只做「规范化相对路径」的字符串判定，零 IO、零副作用、不嗅探内容；
+#   · 判定故意保守：宁可多问一次，也不让密钥类文件被静默读走；
+#   · 命中即返回 True，调用方据此恢复报批。
+SENSITIVE_NAME_GLOBS = (
+    ".env", ".env.*", "*.env",
+    "*.key", "*.pem", "*.pfx", "*.p12", "*.keystore", "*.jks",
+    "id_rsa", "id_rsa.*", "id_ed25519", "id_ed25519.*", "id_dsa*",
+    "*.credential*", "*.secret*", "*passwd*", "*password*",
+    ".netrc", ".npmrc", ".pypirc", ".git-credentials",
+    "credentials.json", "secrets.json", "service_account*.json",
+)
+
+# 这些目录前缀下的任何文件都算敏感（备份区里的 .env 副本同样危险）
+_SENSITIVE_DIR_PREFIXES = ("_backup/.env", ".git/")
+
+
+def is_sensitive_path(rel):
+    """判断相对路径是否属于「读取即泄露」的敏感文件（保守判定）。
+
+    命中即意味着：即便该工具本身是只读的，也必须走人工报批 + 强制核验。
+    """
+    if not rel:
+        return False
+    r = str(rel).strip().strip("'\"`").replace("\\", "/").lstrip("/")
+    while r.startswith("./"):
+        r = r[2:]
+    if not r:
+        return False
+    low = r.lower()
+    for pre in _SENSITIVE_DIR_PREFIXES:
+        if low.startswith(pre):
+            return True
+    import fnmatch
+    name = low.rsplit("/", 1)[-1]
+    for g in SENSITIVE_NAME_GLOBS:
+        if fnmatch.fnmatch(name, g) or fnmatch.fnmatch(low, g):
+            return True
+    return False
+
+
+def sensitive_reason(rel):
+    """命中敏感名单时给人类看的一句话；未命中返回空串。"""
+    if is_sensitive_path(rel):
+        return f"敏感文件守护：{rel} 命中密钥/凭据名单，需人工确认"
+    return ""
 
 # ============ 工具实现 ============
 def ws_list(path="", depth=3, max_entries=2000):

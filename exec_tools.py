@@ -28,8 +28,11 @@ EXEC_OUTPUT_ROOT = "logs"
 _CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
 
-def _ts():
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+try:
+    from common import ts as _ts
+except ImportError:               # common.py 缺失时退回本地实现，保持自足
+    def _ts():
+        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _truncate(text):
