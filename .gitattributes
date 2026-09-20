@@ -1,0 +1,41 @@
+# Line-ending policy
+#
+# Git normally decides line endings from local settings (core.autocrlf), which
+# means the bytes other people get depend on THEIR configuration. For a Windows
+# batch project that is not good enough: cmd.exe parses .bat files by byte
+# offset, and LF-only endings can break constructs such as parenthesised blocks
+# combined with goto labels. So the policy is declared here, once, and applies
+# to every clone regardless of local settings.
+
+# Default: let git detect text vs binary
+* text=auto
+
+# Windows batch files must stay CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Source, docs and config stay LF
+*.py    text eol=lf
+*.md    text eol=lf
+*.txt   text eol=lf
+*.json  text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.toml  text eol=lf
+*.ini   text eol=lf
+*.cfg   text eol=lf
+.env        text eol=lf
+.gitignore  text eol=lf
+.gitattributes text eol=lf
+
+# Binaries: never touch
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.webp binary
+*.ico  binary
+*.zip  binary
+*.gz   binary
+*.exe  binary
+*.dll  binary
