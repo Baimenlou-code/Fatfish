@@ -6,5 +6,3 @@ __pycache__/
 
 # --- extra leak prevention ---
 chat_logs/
-workspaceX/
-oldver/
