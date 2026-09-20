@@ -1,23 +1,27 @@
 @echo off
 chcp 65001 >nul
-title 🐟 FatFish Runtime v1.1.1
+title FatFish Runtime v1.1.1
 cd /d "%~dp0"
 
-REM ---- 探测系统语言，设置 FISH_LANG（zh / en）----
-REM      兼容性优先：多级探测逐级降级，全失败默认英文。
-REM      探测只在 bat 层做，Python 侧不参与。
+REM ---- Probe the system language and set FISH_LANG (zh / en) ----
+REM      Compatibility first: a multi-level probe degrades gracefully and
+REM      defaults to English when every level fails.
+REM      The probe happens only in the batch layer; Python is not involved.
 call "%~dp0fatfish_lang.bat"
 
 REM ============================================================
-REM  肥鱼主程序运行窗口（由 fatfish1.1.1.bat 启动）
+REM  FatFish runtime window (started by fatfish1.1.1.bat)
 REM
-REM  本窗口负责：
-REM    1) 通过 launch.py 启动主程序 FATHFISH.py（拿到真实 PID）；
-REM    2) 由 launch.py 用该 PID 拉起监控器 fatfish_watcher.py
-REM       （监控器独立黑窗口，实时滚动记录主程序跑了哪些程序）；
-REM    3) 主程序结束后，监控器自动进入 30 秒倒计时退出。
+REM  This window is responsible for:
+REM    1) starting the main program FATENFISH.py via launch.py (capturing its
+REM       real PID);
+REM    2) launch.py using that PID to bring up the watcher fatfish_watcher.py
+REM       (its own console window, live-scrolling which programs were run);
+REM    3) the watcher counting down 30 seconds and exiting after the main
+REM       program ends.
 REM
-REM  本窗口独立运行：主程序结束后不自动关闭，需按任意键退出。
+REM  This window is standalone: it does not close itself when the program ends;
+REM  press any key to exit.
 REM ============================================================
 
 REM ---- Get this window's (runtime cmd) real PID, then write _fatfish_pid.txt ----
@@ -35,7 +39,7 @@ REM
 REM   Fallback chain: Get-CimInstance -> Get-WmiObject -> window title -> 0
 REM   PID semantics: this file stores the RUNTIME WINDOW PID (not the python PID);
 REM   rewritten on every start, deleted when the program exits.
-REM   (Kept pure ASCII on purpose: a UTF-8 Chinese comment in a .bat can make cmd's
+REM   (Kept pure ASCII on purpose: a non-ASCII comment in a .bat can make cmd's
 REM    byte-offset parsing drift and mis-execute comment text.)
 
 if exist "%~dp0_fatfish_pid.txt" del "%~dp0_fatfish_pid.txt" >nul 2>nul
@@ -65,41 +69,26 @@ if errorlevel 1 set "SELF_PID=0"
 
 > "%~dp0_fatfish_pid.txt" echo %SELF_PID%
 
-REM ---- 换回好看的窗口标题 ----
-title 🐟 FatFish Runtime v1.1.1
+REM ---- restore the friendly window title ----
+title FatFish Runtime v1.1.1
 
 echo.
-if "%FISH_LANG%"=="en" (
-    echo  +------------------------------------------------+
-    echo  ^|  FatFish Runtime Window                        ^|
-    echo  +------------------------------------------------+
-    echo   This window is standalone: it stays open after the program ends.
-    echo   To exit: after the program ends, press any key to close it.
-) else (
-    echo  ╭────────────────────────────────────────────────╮
-    echo  │  🐟 肥鱼主程序运行窗口 [FatFish Runtime Window]  │
-    echo  ╰────────────────────────────────────────────────╯
-    echo   本窗口独立运行：主程序结束后不会自动关闭
-    echo   [standalone window: stays open after the program ends]
-    echo   退出方式：主程序结束后，按任意键关闭本窗口
-    echo   [to exit: after the program ends, press any key to close]
-)
+echo  +------------------------------------------------+
+echo  ^|  FatFish Runtime Window                        ^|
+echo  +------------------------------------------------+
+echo   This window is standalone: it stays open after the program ends.
+echo   To exit: after the program ends, press any key to close it.
 echo.
 
-REM ---- 前台运行启动枢纽 launch.py（它再拉起主程序 + 监控器）----
+REM ---- run the launch hub launch.py in the foreground (it starts main + watcher) ----
 python "%~dp0launch.py"
 set "FISH_EXIT=%errorlevel%"
 
-REM ---- 主程序结束，清掉 PID 文件 ----
+REM ---- main program finished, remove the PID marker ----
 if exist "%~dp0_fatfish_pid.txt" del "%~dp0_fatfish_pid.txt" >nul 2>nul
 
 echo.
-if "%FISH_LANG%"=="en" (
-    echo [FatFish runtime ended] exit code: %FISH_EXIT%
-    echo Press any key to close this window...
-) else (
-    echo [肥鱼主程序已结束] 退出码 [exit code]：%FISH_EXIT%
-    echo [FatFish runtime ended] 按任意键关闭本窗口 [press any key to close this window]...
-)
+echo [FatFish runtime ended] exit code: %FISH_EXIT%
+echo Press any key to close this window...
 pause >nul
 exit /b %FISH_EXIT%

@@ -5,7 +5,6 @@ from datetime import datetime
 
 import exec_tools
 
-# ============ 工作台根目录（运行时可切换）============
 DEFAULT_WORKSPACE = os.getenv(
     "WORKSPACE_DIR",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "workspace"),
@@ -20,111 +19,90 @@ def _init_default():
     _WORKSPACE_DIR = p
 
 def get_workspace():
-    """返回当前工作台根目录。"""
     if _WORKSPACE_DIR is None:
         _init_default()
     return _WORKSPACE_DIR
 
-# 待批准的切换请求：{"path": 目标路径}
 _PENDING_CD = None
 
-
 def default_workspace():
-    """返回默认作业区（家目录）的绝对路径。"""
     return os.path.abspath(
         os.path.expanduser(os.path.expandvars(DEFAULT_WORKSPACE))
     )
 
-
 def is_inside_default(path):
-    """判断路径是否位于默认作业区之内（含自身）。"""
     home = default_workspace()
     p = os.path.abspath(path)
     root = home.rstrip(os.sep) + os.sep
     return p == home or p.startswith(root)
 
-
 def set_workspace(path):
-    """切换工作台根目录，返回 (ok, 说明)。
-
-    规则：
-    - 切回默认作业区（或默认作业区内的子目录）：直接放行。
-    - 切到默认作业区之外：不执行，登记为「待批准」，返回需审批的提示。
-    """
     global _WORKSPACE_DIR, _PENDING_CD
     if not path:
-        return False, "路径为空"
+        return False, "empty path"
     p = os.path.abspath(
         os.path.expanduser(os.path.expandvars(str(path).strip().strip("'\"`")))
     )
     if not os.path.exists(p):
-        return False, f"路径不存在：{p}"
+        return False, f"path does not exist: {p}"
     if not os.path.isdir(p):
-        return False, f"不是目录：{p}"
+        return False, f"not a directory: {p}"
 
-    # 移出默认作业区 → 需用户批准
     if not is_inside_default(p):
         _PENDING_CD = {"path": p}
         return False, (
-            f"⚠️ 该操作会把办公场所移出默认作业区，需用户批准后才能执行。\n"
-            f"目标：{p}\n"
-            f"默认作业区：{default_workspace()}\n"
-            f"请用户确认后，调用 ws_cd_approve 放行。"
+            f"[!] This operation would move the office outside the default "
+            f"sandbox and needs user approval.\n"
+            f"target: {p}\n"
+            f"default sandbox: {default_workspace()}\n"
+            f"Ask the user to confirm, then call ws_cd_approve."
         )
 
     _WORKSPACE_DIR = p
     _PENDING_CD = None
     clear_tickets()
-    _log(f"[{_ts()}] 工作台切换到：{p}")
-    return True, f"工作台已切换到：{p}"
-
+    _log(f"[{_ts()}] workspace switched to: {p}")
+    return True, f"workspace switched to: {p}"
 
 def approve_pending_cd():
-    """批准并执行挂起的切换请求，返回 (ok, 说明)。"""
     global _WORKSPACE_DIR, _PENDING_CD
     if not _PENDING_CD:
-        return False, "当前没有待批准的切换请求"
+        return False, "there is no switch request awaiting approval"
     p = _PENDING_CD["path"]
     if not os.path.isdir(p):
         _PENDING_CD = None
-        return False, f"目标已不存在或不是目录：{p}"
+        return False, f"the target no longer exists or is not a directory: {p}"
     _WORKSPACE_DIR = p
     _PENDING_CD = None
     clear_tickets()
-    _log(f"[{_ts()}] 用户批准，工作台切换到：{p}")
-    return True, f"已批准，工作台切换到：{p}"
+    _log(f"[{_ts()}] user approved; workspace switched to: {p}")
+    return True, f"approved; workspace switched to: {p}"
 
 def reset_workspace():
-    """恢复默认工作台。"""
     _init_default()
     clear_tickets()
-    return True, f"工作台已重置为：{_WORKSPACE_DIR}"
+    return True, f"workspace reset to: {_WORKSPACE_DIR}"
 
-# PEP 562：让 workspace.WORKSPACE_DIR 动态取当前值
 def __getattr__(name):
     if name == "WORKSPACE_DIR":
         return get_workspace()
     raise AttributeError(name)
 
-# ============ 常量（已整体放宽）============
-MAX_READ_BYTES = 5 * 1024 * 1024   # 单文件读取上限：5MB（原 200KB）
-MAX_READ_CHARS = 1_000_000         # 单文件读取字符上限：100 万（原 5 万）
+MAX_READ_BYTES = 5 * 1024 * 1024
+MAX_READ_CHARS = 1_000_000
 
 def _log(msg):
     logging.info(msg)
 
 try:
     from common import ts as _ts
-except ImportError:               # common.py 缺失时退回本地实现，保持自足
+except ImportError:
     def _ts():
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-# ============ 读过凭证（会话级）============
-# path -> (mtime, size)  表示"本会话内已确认读过该文件"
 _READ_TICKETS = {}
 
 def _issue_ticket(path):
-    """登记已读凭证。"""
     try:
         st = os.stat(path)
         _READ_TICKETS[os.path.abspath(path)] = (st.st_mtime, st.st_size)
@@ -132,38 +110,32 @@ def _issue_ticket(path):
         pass
 
 def _check_ticket(path):
-    """检查是否持有有效凭证。返回 (ok, 提示)。"""
     ap = os.path.abspath(path)
     if not os.path.exists(ap):
-        # 文件不存在 → 允许新建，无需凭证
         return True, ""
     tk = _READ_TICKETS.get(ap)
     if tk is None:
-        return False, f"未读过该文件，请先 ws_read：{_rel(ap)}"
+        return False, f"this file has not been read yet; ws_read it first: {_rel(ap)}"
     try:
         st = os.stat(ap)
     except OSError as e:
-        return False, f"无法读取文件状态：{e}"
+        return False, f"cannot read file status: {e}"
     if st.st_mtime != tk[0] or st.st_size != tk[1]:
-        _READ_TICKETS.pop(ap, None)   # 凭证作废
-        return False, f"文件已被外部改动，凭证失效，请重新 ws_read：{_rel(ap)}"
+        _READ_TICKETS.pop(ap, None)
+        return False, f"the file changed externally, ticket expired; ws_read it again: {_rel(ap)}"
     return True, ""
 
 def clear_tickets():
-    """清空所有读过凭证（例如切换工作台时）。"""
     _READ_TICKETS.clear()
 
-# ============ 根一级文件变更备案 ============
-BACKUP_DIRNAME = "_backup"   # 备份区（位于工作台根下，自身不受备案规则约束）
+BACKUP_DIRNAME = "_backup"
 
 def _is_root_level_file(rel):
-    """判断相对路径是否为'工作台根一级'的文件（不含子目录）。"""
     if not rel:
         return False
     r = str(rel).strip().strip("'\"`").replace("\\", "/").strip("/")
     if not r:
         return False
-    # 根一级：只有一段，且不是备份区自身
     if "/" in r:
         return False
     if r == BACKUP_DIRNAME or r.startswith(BACKUP_DIRNAME + "/"):
@@ -171,14 +143,10 @@ def _is_root_level_file(rel):
     return True
 
 def _backup_root_file(rel, p):
-    """把根一级文件的原内容备份到 _backup/。返回 (ok, 说明)。
-
-    仅当目标文件已存在时才备份；不存在（新建）则跳过。
-    """
     if not _is_root_level_file(rel):
-        return True, ""            # 非根一级，不备案
+        return True, ""
     if not os.path.isfile(p):
-        return True, ""            # 新建，无原文件
+        return True, ""
     ws = get_workspace()
     bkdir = os.path.join(ws, BACKUP_DIRNAME)
     try:
@@ -189,13 +157,11 @@ def _backup_root_file(rel, p):
         with open(p, "rb") as src, open(dst, "wb") as out:
             out.write(src.read())
     except OSError as e:
-        return False, f"备案失败（原文件未能备份）：{e}"
-    _log(f"[{_ts()}] 备案原文件 {name} -> {_rel(dst)}")
-    return True, f"已备案原文件 → {_rel(dst)}"
+        return False, f"backup failed (original could not be copied): {e}"
+    _log(f"[{_ts()}] backed up original {name} -> {_rel(dst)}")
+    return True, f"original backed up -> {_rel(dst)}"
 
-# ============ 路径安全 ============
 def _safe_path(rel):
-    """把相对路径解析到工作台内，越界则抛异常。"""
     ws = get_workspace()
     if rel is None:
         rel = ""
@@ -206,27 +172,15 @@ def _safe_path(rel):
         target = os.path.abspath(os.path.join(ws, rel))
     root = ws.rstrip(os.sep) + os.sep
     if target != ws and not target.startswith(root):
-        raise PermissionError(f"路径越界：{rel}（工作台根：{ws}）")
+        raise PermissionError(f"path escapes the workspace: {rel} (workspace root: {ws})")
     return target
 
 def _rel(path):
-    """转成相对工作台的展示路径。"""
     try:
         return os.path.relpath(path, get_workspace())
     except ValueError:
         return path
 
-# ============ 敏感文件守护（只读免审的前提）============
-# 2026-09-19 新增。
-# 背景：文件读取类操作（ws_read）本身零副作用，遂从「人工报批名单」中移除，
-#       以降低高频人工确认。但"只读"并不等于"无风险"——读出来的内容会进入
-#       模型上下文，等同于把文件内容送到外部服务。因此凡属「读取即泄露」的
-#       文件，必须恢复人工确认（并在核验侧强制送审）。
-#
-# 设计原则：
-#   · 只做「规范化相对路径」的字符串判定，零 IO、零副作用、不嗅探内容；
-#   · 判定故意保守：宁可多问一次，也不让密钥类文件被静默读走；
-#   · 命中即返回 True，调用方据此恢复报批。
 SENSITIVE_NAME_GLOBS = (
     ".env", ".env.*", "*.env",
     "*.key", "*.pem", "*.pfx", "*.p12", "*.keystore", "*.jks",
@@ -236,15 +190,9 @@ SENSITIVE_NAME_GLOBS = (
     "credentials.json", "secrets.json", "service_account*.json",
 )
 
-# 这些目录前缀下的任何文件都算敏感（备份区里的 .env 副本同样危险）
 _SENSITIVE_DIR_PREFIXES = ("_backup/.env", ".git/")
 
-
 def is_sensitive_path(rel):
-    """判断相对路径是否属于「读取即泄露」的敏感文件（保守判定）。
-
-    命中即意味着：即便该工具本身是只读的，也必须走人工报批 + 强制核验。
-    """
     if not rel:
         return False
     r = str(rel).strip().strip("'\"`").replace("\\", "/").lstrip("/")
@@ -263,22 +211,18 @@ def is_sensitive_path(rel):
             return True
     return False
 
-
 def sensitive_reason(rel):
-    """命中敏感名单时给人类看的一句话；未命中返回空串。"""
     if is_sensitive_path(rel):
-        return f"敏感文件守护：{rel} 命中密钥/凭据名单，需人工确认"
+        return f"sensitive-file guard: {rel} matches the key/credential list and needs manual confirmation"
     return ""
 
-# ============ 工具实现 ============
 def ws_list(path="", depth=3, max_entries=2000):
-    """列出工作台内目录树。"""
     try:
         p = _safe_path(path)
     except PermissionError as e:
         return False, str(e)
     if not os.path.isdir(p):
-        return False, f"不是目录：{_rel(p)}"
+        return False, f"not a directory: {_rel(p)}"
 
     lines, count = [], 0
     base_depth = p.rstrip(os.sep).count(os.sep)
@@ -294,23 +238,22 @@ def ws_list(path="", depth=3, max_entries=2000):
         for name in files:
             count += 1
             if count > max_entries:
-                lines.append(f"{indent}  ...（超过 {max_entries} 项，已截断）")
+                lines.append(f"{indent}  ...(more than {max_entries} entries, truncated)")
                 return True, "\n".join(lines)
             size = os.path.getsize(os.path.join(root, name))
             lines.append(f"{indent}  {name}  ({size}B)")
-    return True, "\n".join(lines) or "（空目录）"
+    return True, "\n".join(lines) or "(empty directory)"
 
 def ws_read(path):
-    """读取工作台内文件，成功后发放'读过凭证'。"""
     try:
         p = _safe_path(path)
     except PermissionError as e:
         return False, str(e)
     if not os.path.isfile(p):
-        return False, f"文件不存在：{_rel(p)}"
+        return False, f"file does not exist: {_rel(p)}"
     size = os.path.getsize(p)
     if size > MAX_READ_BYTES:
-        return False, f"文件过大（{size}B > {MAX_READ_BYTES}B）"
+        return False, f"file too large ({size}B > {MAX_READ_BYTES}B)"
     text = None
     for enc in ("utf-8-sig", "utf-8", "gbk", "big5"):
         try:
@@ -320,23 +263,21 @@ def ws_read(path):
         except UnicodeDecodeError:
             continue
         except OSError as e:
-            return False, f"读取失败：{e}"
+            return False, f"read failed: {e}"
     if text is None:
-        return False, "无法识别文件编码"
+        return False, "unrecognized file encoding"
     if len(text) > MAX_READ_CHARS:
-        text = text[:MAX_READ_CHARS] + f"\n...（已截断，原文 {len(text)} 字符）"
+        text = text[:MAX_READ_CHARS] + f"\n...(truncated; original {len(text)} chars)"
     _issue_ticket(p)
     return True, text
 
 def ws_write(path, content):
-    """写入/覆盖文件，自动建父目录。全量覆盖豁免凭证校验，写完刷新凭证。"""
     try:
         p = _safe_path(path)
     except PermissionError as e:
         return False, str(e)
     if os.path.isdir(p):
-        return False, f"目标是目录：{_rel(p)}"
-    # 根一级文件：覆盖前先备案原文件
+        return False, f"target is a directory: {_rel(p)}"
     ok, bmsg = _backup_root_file(path, p)
     if not ok:
         return False, bmsg
@@ -345,14 +286,13 @@ def ws_write(path, content):
         with open(p, "w", encoding="utf-8") as f:
             f.write(content if content is not None else "")
     except OSError as e:
-        return False, f"写入失败：{e}"
+        return False, f"write failed: {e}"
     _issue_ticket(p)
-    _log(f"[{_ts()}] ws_write {_rel(p)} ({len(content or '')} 字符)")
-    tail = f"｜{bmsg}" if bmsg else ""
-    return True, f"已写入 {_rel(p)}（{len(content or '')} 字符）{tail}"
+    _log(f"[{_ts()}] ws_write {_rel(p)} ({len(content or '')} chars)")
+    tail = f" | {bmsg}" if bmsg else ""
+    return True, f"wrote {_rel(p)} ({len(content or '')} chars){tail}"
 
 def ws_append(path, content):
-    """追加内容到文件末尾。需持有读过凭证。"""
     try:
         p = _safe_path(path)
     except PermissionError as e:
@@ -360,7 +300,6 @@ def ws_append(path, content):
     ok, msg = _check_ticket(p)
     if not ok:
         return False, msg
-    # 根一级文件：追加前先备案原文件
     ok, bmsg = _backup_root_file(path, p)
     if not ok:
         return False, bmsg
@@ -369,24 +308,22 @@ def ws_append(path, content):
         with open(p, "a", encoding="utf-8") as f:
             f.write(content if content is not None else "")
     except OSError as e:
-        return False, f"追加失败：{e}"
+        return False, f"append failed: {e}"
     _issue_ticket(p)
     _log(f"[{_ts()}] ws_append {_rel(p)}")
-    tail = f"｜{bmsg}" if bmsg else ""
-    return True, f"已追加到 {_rel(p)}{tail}"
+    tail = f" | {bmsg}" if bmsg else ""
+    return True, f"appended to {_rel(p)}{tail}"
 
 def ws_replace(path, old, new, count=1):
-    """精确替换文件内文本（默认只替换第一处；count=0 表示全部）。需持有读过凭证。"""
     try:
         p = _safe_path(path)
     except PermissionError as e:
         return False, str(e)
     if not os.path.isfile(p):
-        return False, f"文件不存在：{_rel(p)}"
+        return False, f"file does not exist: {_rel(p)}"
     ok, msg = _check_ticket(p)
     if not ok:
         return False, msg
-    # 根一级文件：替换前先备案原文件
     ok, bmsg = _backup_root_file(path, p)
     if not ok:
         return False, bmsg
@@ -394,33 +331,31 @@ def ws_replace(path, old, new, count=1):
         with open(p, "r", encoding="utf-8") as f:
             text = f.read()
     except OSError as e:
-        return False, f"读取失败：{e}"
+        return False, f"read failed: {e}"
     if old not in text:
-        return False, "未找到要替换的内容（需精确匹配）"
+        return False, "the text to replace was not found (exact match required)"
     n = text.count(old)
     text = text.replace(old, new, count if count and count > 0 else -1)
     try:
         with open(p, "w", encoding="utf-8") as f:
             f.write(text)
     except OSError as e:
-        return False, f"写入失败：{e}"
+        return False, f"write failed: {e}"
     _issue_ticket(p)
-    _log(f"[{_ts()}] ws_replace {_rel(p)}（原有 {n} 处）")
-    tail = f"｜{bmsg}" if bmsg else ""
-    return True, f"已修改 {_rel(p)}（原有 {n} 处匹配）{tail}"
+    _log(f"[{_ts()}] ws_replace {_rel(p)} ({n} occurrence(s) originally)")
+    tail = f" | {bmsg}" if bmsg else ""
+    return True, f"modified {_rel(p)} ({n} match(es) originally){tail}"
 
 def ws_delete(path):
-    """删除文件或空目录。需持有读过凭证。"""
     try:
         p = _safe_path(path)
     except PermissionError as e:
         return False, str(e)
     if not os.path.exists(p):
-        return False, f"不存在：{_rel(p)}"
+        return False, f"does not exist: {_rel(p)}"
     ok, msg = _check_ticket(p)
     if not ok:
         return False, msg
-    # 根一级文件：删除前先备案原文件
     ok, bmsg = _backup_root_file(path, p)
     if not ok:
         return False, bmsg
@@ -430,29 +365,27 @@ def ws_delete(path):
         else:
             os.remove(p)
     except OSError as e:
-        return False, f"删除失败：{e}"
+        return False, f"delete failed: {e}"
     _READ_TICKETS.pop(os.path.abspath(p), None)
     _log(f"[{_ts()}] ws_delete {_rel(p)}")
-    tail = f"｜{bmsg}" if bmsg else ""
-    return True, f"已删除 {_rel(p)}{tail}"
+    tail = f" | {bmsg}" if bmsg else ""
+    return True, f"deleted {_rel(p)}{tail}"
 
 def ws_mkdir(path):
-    """创建目录。"""
     try:
         p = _safe_path(path)
     except PermissionError as e:
         return False, str(e)
     os.makedirs(p, exist_ok=True)
-    return True, f"已创建目录 {_rel(p)}"
+    return True, f"created directory {_rel(p)}"
 
 def ws_search(keyword, path="", max_hits=500):
-    """在工作台内全文搜索关键词。"""
     try:
         p = _safe_path(path)
     except PermissionError as e:
         return False, str(e)
     if not os.path.isdir(p):
-        return False, f"不是目录：{_rel(p)}"
+        return False, f"not a directory: {_rel(p)}"
     hits = []
     for root, dirs, files in os.walk(p):
         dirs.sort()
@@ -464,53 +397,45 @@ def ws_search(keyword, path="", max_hits=500):
                         if keyword in line:
                             hits.append(f"{_rel(fp)}:{i}: {line.rstrip()[:200]}")
                             if len(hits) >= max_hits:
-                                return True, "\n".join(hits) + f"\n...（超过 {max_hits} 条，已截断）"
+                                return True, "\n".join(hits) + f"\n...(more than {max_hits} hits, truncated)"
             except OSError:
                 continue
-    return True, "\n".join(hits) if hits else f"未找到：{keyword}"
+    return True, "\n".join(hits) if hits else f"not found: {keyword}"
 
 def ws_cd(path):
-    """切换工作台根目录。移出默认作业区时需用户批准。"""
     return set_workspace(path)
 
 def ws_cd_approve():
-    """批准并执行挂起的切换请求（移出默认作业区）。"""
     return approve_pending_cd()
 
 def ws_where():
-    """查看当前工作台根目录。"""
-    return True, f"当前工作台：{get_workspace()}"
+    return True, f"current workspace: {get_workspace()}"
 
 def ws_forget(path=""):
-    """清空读过凭证；给 path 则只清该文件。"""
     if not path:
         clear_tickets()
-        return True, "已清空所有读过凭证"
+        return True, "cleared all read tickets"
     try:
         p = _safe_path(path)
     except PermissionError as e:
         return False, str(e)
     _READ_TICKETS.pop(os.path.abspath(p), None)
-    return True, f"已清除凭证：{_rel(p)}"
+    return True, f"cleared the ticket for: {_rel(p)}"
 
-# ============ 命令 / 代码执行 ============
 def ws_run_cmd(command, cwd="", timeout=30):
-    """在工作台内执行 CMD/Shell 命令，返回输出。"""
     return exec_tools.run_cmd(command, get_workspace(), cwd=cwd, timeout=timeout)
 
 def ws_run_python(code, cwd="", timeout=30, filename=""):
-    """在工作台内运行一段 Python 代码，返回输出。"""
     return exec_tools.run_python(
         code, get_workspace(), cwd=cwd, timeout=timeout, filename=filename or None
     )
 
-# ============ Function Calling 工具定义 ============
 TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
             "name": "ws_where",
-            "description": "查看当前工作台根目录。",
+            "description": "Show the current workspace root.",
             "parameters": {"type": "object", "properties": {}},
         },
     },
@@ -518,10 +443,10 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "ws_cd",
-            "description": "切换工作台根目录到指定路径（必须是已存在的目录）。注意：移出默认作业区（~\\workspace）的操作需用户批准，会返回待批准提示。",
+            "description": "Switch the workspace root to the given path (must be an existing directory). Note: moving outside the default sandbox (~\\workspace) needs user approval and returns a pending-approval notice.",
             "parameters": {
                 "type": "object",
-                "properties": {"path": {"type": "string", "description": "新的工作台根目录"}},
+                "properties": {"path": {"type": "string", "description": "the new workspace root"}},
                 "required": ["path"],
             },
         },
@@ -530,7 +455,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "ws_cd_approve",
-            "description": "批准并执行上一次被拦下的工作台切换请求（移出默认作业区的操作）。仅在用户明确同意后调用。",
+            "description": "Approve and execute the previous workspace switch that was blocked (moving outside the default sandbox). Only call this after the user has explicitly agreed.",
             "parameters": {"type": "object", "properties": {}},
         },
     },
@@ -538,12 +463,12 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "ws_list",
-            "description": "列出工作台内的目录树。path 为相对工作台的路径，空字符串表示根目录。",
+            "description": "List the directory tree inside the workspace. path is relative to the workspace; an empty string means the root.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "相对路径，默认根目录"},
-                    "depth": {"type": "integer", "description": "递归深度，默认 3"},
+                    "path": {"type": "string", "description": "relative path, defaults to the root"},
+                    "depth": {"type": "integer", "description": "recursion depth, default 3"},
                 },
             },
         },
@@ -552,10 +477,10 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "ws_read",
-            "description": "读取工作台内的文本文件内容。读取成功后会获得'读过凭证'，之后可在本会话内直接修改该文件。",
+            "description": "Read the contents of a text file inside the workspace. On success it issues a 'read ticket' and the file can then be modified directly within this session.",
             "parameters": {
                 "type": "object",
-                "properties": {"path": {"type": "string", "description": "文件相对路径"}},
+                "properties": {"path": {"type": "string", "description": "relative file path"}},
                 "required": ["path"],
             },
         },
@@ -564,12 +489,12 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "ws_write",
-            "description": "写入或覆盖工作台内的文件，会自动创建父目录。全量覆盖无需先读。注意：根一级文件被覆盖前会自动备份原文件到 _backup/。",
+            "description": "Write or overwrite a file inside the workspace, creating parent directories automatically. A full overwrite needs no prior read. Note: a root-level file is automatically backed up to _backup/ before being overwritten.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "文件相对路径"},
-                    "content": {"type": "string", "description": "完整文件内容"},
+                    "path": {"type": "string", "description": "relative file path"},
+                    "content": {"type": "string", "description": "the complete file content"},
                 },
                 "required": ["path", "content"],
             },
@@ -579,7 +504,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "ws_append",
-            "description": "把内容追加到工作台内文件末尾。需先 ws_read 过该文件。根一级文件追加前会自动备份原文件。",
+            "description": "Append content to the end of a file inside the workspace. The file must be ws_read first. A root-level file is automatically backed up before appending.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -594,14 +519,14 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "ws_replace",
-            "description": "在工作台内文件中精确替换文本（old 必须原样匹配，含缩进）。需先 ws_read 过该文件。根一级文件替换前会自动备份原文件。",
+            "description": "Exact text replacement inside a file in the workspace (old must match verbatim, including indentation). The file must be ws_read first. A root-level file is automatically backed up before replacing.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {"type": "string"},
-                    "old": {"type": "string", "description": "要被替换的原文"},
-                    "new": {"type": "string", "description": "替换后的新内容"},
-                    "count": {"type": "integer", "description": "替换次数，0 或省略表示全部"},
+                    "old": {"type": "string", "description": "the original text to replace"},
+                    "new": {"type": "string", "description": "the new replacement text"},
+                    "count": {"type": "integer", "description": "number of replacements; 0 or omitted means all"},
                 },
                 "required": ["path", "old", "new"],
             },
@@ -611,7 +536,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "ws_delete",
-            "description": "删除工作台内的文件或空目录。需先 ws_read 过该文件。根一级文件删除前会自动备份原文件。",
+            "description": "Delete a file or empty directory inside the workspace. The file must be ws_read first. A root-level file is automatically backed up before deletion.",
             "parameters": {
                 "type": "object",
                 "properties": {"path": {"type": "string"}},
@@ -623,7 +548,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "ws_mkdir",
-            "description": "在工作台内创建目录。",
+            "description": "Create a directory inside the workspace.",
             "parameters": {
                 "type": "object",
                 "properties": {"path": {"type": "string"}},
@@ -635,12 +560,12 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "ws_search",
-            "description": "在工作台内全文搜索关键词，返回 文件:行号: 内容。",
+            "description": "Full-text search for a keyword inside the workspace; returns file:line: content.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "keyword": {"type": "string"},
-                    "path": {"type": "string", "description": "搜索范围，默认根目录"},
+                    "path": {"type": "string", "description": "search scope, defaults to the root"},
                 },
                 "required": ["keyword"],
             },
@@ -650,10 +575,10 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "ws_forget",
-            "description": "清除'读过凭证'。不传 path 清全部；传 path 只清该文件。清掉后需重新 ws_read 才能改。",
+            "description": "Clear 'read tickets'. With no path, clears all; with a path, clears only that file. After clearing, the file must be ws_read again before it can be modified.",
             "parameters": {
                 "type": "object",
-                "properties": {"path": {"type": "string", "description": "可选，指定文件"}},
+                "properties": {"path": {"type": "string", "description": "optional; a specific file"}},
             },
         },
     },
@@ -662,17 +587,18 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "ws_run_cmd",
             "description": (
-                "在工作台目录内执行一条 CMD（Windows）/Shell（其他平台）命令，"
-                "返回 stdout、stderr 和退出码。可用于查看系统信息、运行程序、"
-                "编译、安装依赖、git 操作等。命令默认在工作台根目录执行，"
-                "可用 cwd 指定工作台内的子目录。有超时保护。"
+                "Run one CMD (Windows) / Shell (other platforms) command inside the workspace "
+                "directory and return stdout, stderr, and the exit code. Useful for inspecting "
+                "system info, running programs, compiling, installing dependencies, git "
+                "operations, and so on. The command runs in the workspace root by default; use "
+                "cwd to target a subdirectory. Timeout-protected."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "command": {"type": "string", "description": "要执行的命令，例如 'dir' 或 'python --version'"},
-                    "cwd": {"type": "string", "description": "相对工作台的子目录，默认工作台根目录"},
-                    "timeout": {"type": "integer", "description": "超时秒数，默认 120，最大 1800"},
+                    "command": {"type": "string", "description": "the command to run, e.g. 'dir' or 'python --version'"},
+                    "cwd": {"type": "string", "description": "subdirectory relative to the workspace; defaults to the workspace root"},
+                    "timeout": {"type": "integer", "description": "timeout in seconds; default 120, max 1800"},
                 },
                 "required": ["command"],
             },
@@ -683,17 +609,19 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "ws_run_python",
             "description": (
-                "在工作台内运行一段 Python 代码并返回执行结果（stdout/stderr/退出码）。"
-                "代码会写入临时文件后用当前解释器执行，支持多行、import、文件读写等。"
-                "适合验证算法、跑脚本、处理数据。有超时保护。"
+                "Run a snippet of Python inside the workspace and return the result "
+                "(stdout/stderr/exit code). The code is written to a temporary file and run with "
+                "the current interpreter; multi-line code, imports, and file IO are all supported. "
+                "Good for verifying algorithms, running scripts, and processing data. "
+                "Timeout-protected."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "code": {"type": "string", "description": "完整的 Python 代码"},
-                    "cwd": {"type": "string", "description": "相对工作台的子目录，默认工作台根目录"},
-                    "timeout": {"type": "integer", "description": "超时秒数，默认 120，最大 1800"},
-                    "filename": {"type": "string", "description": "可选，临时脚本文件名（便于 traceback 识别）"},
+                    "code": {"type": "string", "description": "the complete Python code"},
+                    "cwd": {"type": "string", "description": "subdirectory relative to the workspace; defaults to the workspace root"},
+                    "timeout": {"type": "integer", "description": "timeout in seconds; default 120, max 1800"},
+                    "filename": {"type": "string", "description": "optional temp script filename (helps tracebacks identify it)"},
                 },
                 "required": ["code"],
             },
@@ -701,7 +629,6 @@ TOOL_SCHEMAS = [
     },
 ]
 
-# ============ 工具分发 ============
 _DISPATCH = {
     "ws_where":   lambda a: ws_where(),
     "ws_cd":      lambda a: ws_cd(a["path"]),
@@ -720,13 +647,12 @@ _DISPATCH = {
 }
 
 def call_tool(name, args):
-    """执行工具，返回 (ok, result_text)。"""
     fn = _DISPATCH.get(name)
     if not fn:
-        return False, f"未知工具：{name}"
+        return False, f"unknown tool: {name}"
     try:
         return fn(args or {})
     except KeyError as e:
-        return False, f"缺少参数：{e}"
+        return False, f"missing parameter: {e}"
     except Exception as e:
-        return False, f"工具执行异常：{e}"
+        return False, f"tool raised an exception: {e}"
