@@ -84,7 +84,7 @@ No programming knowledge needed — just follow along 👇
 | 💻 跑命令 / Run commands | 让它在工作台里执行 CMD 命令 / runs CMD commands inside the workspace |
 | 🐍 跑 Python / Run Python | 让它在工作台里跑 Python 代码，traceback 可见 / runs Python with real tracebacks |
 | 💾 自动存代码 / Auto-save code | 它写的代码块自动命名存盘（名字由 AI 起）/ auto-names and saves code blocks |
-| 🪟 实时输出窗口 / Live output window | 另开一个黑窗，实时滚动显示子程序输出 / a 2nd window tails sub-program output |
+| 🪟 实时输出窗口 / Live output window | 另开**两个**独立黑窗：监控器（滚子程序输出）+ 状态台（过程信息与报批凭证）/ two extra windows: watcher + status console |
 | 🪟 对话窗口（操作台）/ Chat window | 黑底 QQ 式窗口：多行打字、拖文件与图片进来、报批点按钮、回复边收边长 / the window IS the console (Ch.21) |
 | 🌊 流式输出 / Streaming | 回复逐字上屏，不再憋到最后一次刷屏；`/stream off` 可退回 / token-by-token output (Ch.21) |
 | 🐧 上 QQ / QQ follow mode | QQ 群里的「肥鱼」就是命令行这个本体：同一份记忆、同一套工具、同一道闸门 / same brain on QQ (Ch.20) |
@@ -182,15 +182,20 @@ VERIFIER_MODEL=deepseek-flash
 
 看到彩色的肥鱼横幅就成功了 🎉 / If you see the colorful FatFish banner, you're in 🎉
 
-**⚠️ 你会看到两个窗口，这是正常的：**
+**⚠️ 你会看到三个窗口，这是正常的：**
 
 | 窗口 / Window | 标题 / Title | 干什么 / What It Does |
 |---|---|---|
-| 主窗口 / Main | `🐟 FatFish Runtime v1.2.1` | 你打字聊天的地方 / where you type and chat |
-| 监控窗口 / Watcher | （自成一体）/ standalone | 实时滚动显示肥鱼跑的子程序输出 / tails sub-program output |
+| 主窗口 / Main | `🐟 肥鱼 v1.2.1 ｜ FatFish` | 你打字聊天的地方（对话窗口会另有独立窗口）/ where you type and chat |
+| 监控窗口 / Watcher | `（自成一体）` standalone | 实时滚动显示肥鱼跑的子程序输出 / tails sub-program output |
+| 状态台 / Status | `🐟 肥鱼状态台 [FatFish Status Console]` | 过程信息、工具日志、报批凭证 / process info & approval receipts |
 
-**两个窗口都是「独立窗口」：程序结束后不会自动关闭，需要按任意键。**
-Both windows are **standalone**: they stay open after the program ends; press any key.
+**这些窗口都是「独立窗口」：程序结束后不会自动关闭，需要按任意键。**
+These windows are **standalone**: they stay open after the program ends; press any key.
+
+> 💡 若开启了对话窗口（`FATFISH_WINDOW=1`，默认开），还会多一个 Tk 窗口 ——
+> 它就是操作台，可以完全替代主窗口打字。
+> 用 `quit` 主动退出时，这些窗口会被一并关掉（见第三章「退出信号」）。
 
 > 启动器自己的窗口在跑到第 4 步时会提示「按任意键关闭本启动器窗口」，
 > 按一下关掉它就行，主窗口不受影响。
@@ -215,7 +220,7 @@ Type `/reload` at the FatFish prompt.
         │  ④ 没有 .env 就生成模板并要求填 key
         │  ⑤ start "" cmd /k "fatfish_runtime.bat"   ← 开新窗口
         ▼
-fatfish_runtime.bat（新窗口，标题 🐟 FatFish Runtime v1.2.1）
+fatfish_runtime.bat（新窗口，标题 🐟 肥鱼 v1.2.1 ｜ FatFish）
         │
         │  ① chcp 65001（UTF-8 代码页）
         │  ② call fatfish_lang.bat   ← 探测系统语言 → FISH_LANG=zh / en
@@ -223,23 +228,44 @@ fatfish_runtime.bat（新窗口，标题 🐟 FatFish Runtime v1.2.1）
         │     （PowerShell 由本窗口直接启动，父进程即本窗口；不再依赖窗口标题）
         │  ④ 前台运行 python launch.py
         ▼
-launch.py
+launch.py（启动枢纽：一个主进程 + 两个附属窗口）
         │
-        │  ① subprocess.Popen([python, FATHFISH.py])  ← 拿到【真实 PID】
-        │  ② subprocess.Popen([python, fatfish_watcher.py, <真实PID>],
-        │                     creationflags=CREATE_NEW_CONSOLE)  ← 独立黑窗
-        │  ③ main_proc.wait()  ← 等主程序结束
-        │  ④ 再等监控器最多 40 秒收尾，超时就 kill
+        │  ① Popen([python, FATHFISH.py])                      ← 拿到【主程序 PID】
+        │  ② Popen([python, fatfish_watcher.py, <PID>],
+        │          creationflags=CREATE_NEW_CONSOLE)            ← 监控器（独立黑窗）
+        │  ③ Popen([python, status_console.py, --main-pid <PID>],
+        │          creationflags=CREATE_NEW_CONSOLE)            ← 状态台（独立黑窗）
+        │  ④ main_proc.wait()                    ← 等主程序结束
+        │  ⑤ 再等监控器最多 40 秒（超时 kill）→ 再等状态台最多 15 秒（超时 kill）
         ▼
-   ┌────────────────────────┐        ┌─────────────────────────────┐
-   │  FATHFISH.py（前台）    │        │  fatfish_watcher.py（独立窗）│
-   │  聊天主循环 / REPL      │        │  ① tail logs/**/exec_*.out   │
-   │  工具调用 / 联网 / 存码 │        │  ② 每 1 秒查一次主程序还活着吗│
-   └────────────────────────┘        │  ③ 主程序消失 → 再 drain 3 轮 │
-                                     │  ④ 30 秒倒计时后自动退出      │
-                                     │     （按任意键可提前退）      │
-                                     └─────────────────────────────┘
+   ┌──────────────────────┐   ┌──────────────────────────┐   ┌────────────────────────┐
+   │  FATHFISH.py（前台）  │   │  fatfish_watcher.py      │   │  status_console.py     │
+   │  聊天主循环 / REPL    │   │  ① tail logs/**/exec_*.out│   │  ① 增量 tail           │
+   │  工具调用 / 联网 / 存码│   │  ② 每 1 秒查主程序活着吗  │   │     .fatfish_tmp/console│
+   │  对话窗口（Tk，可选） │   │  ③ 主程序消失 → drain 3 轮│   │     /status.log        │
+   └──────────────────────┘   │  ④ 30 秒倒计时后退出      │   │  ② 每秒刷心跳文件      │
+                              │     （主动退出时跳过）    │   │     console.online     │
+                              └──────────────────────────┘   └────────────────────────┘
 ```
+
+### 退出时会发生什么 / What Happens on Exit
+
+主程序结束前会写两个信令文件（都在 `.fatfish_tmp/`），附属窗口据此收尾：
+
+| 信令 / Signal | 内容 | 谁在看 / Who Watches |
+|---|---|---|
+| `shutdown.signal` | `时间 + clean/abort + **主程序 PID**` | 监控器、状态台 → 见到就立即收尾（**不再等 30 秒倒计时**） |
+| `main.pid` | 主程序的**真身 PID** | 两个窗口用它认「我该服务谁」（见下方校验规则） |
+| `quit_clean` | 仅 `quit` / `Ctrl+C` 时额外写 | `fatfish_runtime.bat` → 见到就**连运行窗口一起关掉** |
+
+> ⚠️ **校验规则（2026-10-02 修）**：信号文件原先**不带身份信息**，只看时间戳
+> 「比我新就关」—— 于是**任何** fatfish 实例退出都会把正在用的窗口一起关掉（真实事故）。
+> 现在窗口会比对 **PID**：只认「自己服务的那一个主程序」写的信号；
+> 旧格式信号（无 PID）仍按时间戳兼容。
+>
+> 之所以要多一个 `main.pid`：本机 `venv\Scripts\python.exe` 是**转发壳**，
+> `launch.py` 拿到的 PID 是壳的，而写信号的是壳的子进程（真身）——
+> 不比对这个文件，正常退出反而会被判成「外来信号」。
 
 > 📌 **监控器只看「新增」输出**：它启动时会把已存在的 `exec_*.out` 记为**基线**，
 > 之后只滚动基线之后的新内容，不会再把当天 / 昨天的历史输出重刷一遍
@@ -250,7 +276,7 @@ launch.py
 | 设计 / Design | 原因 / Reason |
 |---|---|
 | 用 `launch.py` 而不是纯 bat 启动 | **纯 bat 拿不到子进程的真实 PID**（`%errorlevel%` 只是退出码）。Python 的 `subprocess.Popen` 能直接拿到 `pid`，还能避开 bat 里多层引号嵌套导致的「闪退」/ bat cannot get a child PID; Python can |
-| 监控器用 `CREATE_NEW_CONSOLE` | 让它有**自己独立的黑窗口**，输出不跟主窗口打架 / gives it its own window |
+| 监控器 / 状态台用 `CREATE_NEW_CONSOLE` | 各给一个**独立黑窗口**，输出不跟主窗口打架 / each gets its own window |
 | 主程序不用 `CREATE_NEW_CONSOLE` | 主程序要**继承当前控制台**，否则它的输入输出会跑到别的窗口去 / main inherits the console |
 | `fatfish_runtime.bat` 取自己的 PID | 用「重定向法」取真实 runtime cmd PID 写进 `_fatfish_pid.txt`，方便**外部工具识别/关闭肥鱼窗口** / for external tools |
 
@@ -294,9 +320,9 @@ launch.py
 | `部署记录_20261002.md` | 4.6 KB | 118 | 最近一次部署的**交接单**（改了什么 / 怎么退）/ deploy handover |
 | `fatfish_lang.bat` | 3.9 KB | 89 | **语言探测器**（四级降级 → `FISH_LANG`）/ language probe |
 | `.env` | 2.2 KB | 65 | 你的密钥配置（🔴 **绝不要分享 / 上传**）/ your keys |
-| `README.md` | 138.0 KB | 2382 | 就是本文件（第 3.5 版 · 2026-10-02；会随文档更新变动）/ this file |
+| `README.md` | 141.7 KB | 2417 | 就是本文件（第 3.5 版 · 2026-10-02；会随文档更新变动）/ this file |
 | `fatfish1.1.1.bat` | 593 B | 12 | 旧名**转发壳**（3 行转发，老快捷方式仍可用）/ legacy forwarder |
-| `.gitignore` | 114 B | 10 | 防误传名单（第一行 `.env`）/ ignore list |
+| `.gitignore` | 224 B | 15 | 防误传名单（`.env` / 日志 / 运行时产物）/ ignore list |
 
 > 📌 **`fatfish_core/`**（10 个模块 / 1856 行）是主程序拆出的功能包，相当于「第 24 个成员」，
 > 但它是个目录、不是文件 —— 详见**第二十二章**。
@@ -308,12 +334,13 @@ launch.py
 > 核心内容早已并入本 README 第十五~十八章。
 > 📌 `_fatfish_pid.txt`（7 B）记 runtime 窗口 PID，只在运行时短暂存在。
 
-### 4.2 一级目录（10 个）/ Top-level dirs (10)
+### 4.2 一级目录（11 个）/ Top-level dirs (11)
 
 | 目录 / Dir | 干啥的 / Purpose | 会被 git 忽略吗 |
 |---|---|---|
 | `workspace/` | **工作台（默认作业区）**：中间脚本 / 临时数据 / 实验产物都放这儿 / the sandbox & default area | ❌ 不忽略 |
 | `fatfish_core/` | ★ **功能包**：10 个模块 / 1856 行，2026-10-02 从主程序拆出（第 22 章）/ the split-out package | ❌ 不忽略 |
+| `fatfish/` | **git 仓库工作区**：主程序 + 文档的完整副本（可直接运行；`main` 分支的检出点）/ the git work tree | ❌ 不忽略 |
 | `logs/`（年 → 月 → 日） | **主程序**的聊天日志与执行输出 / chat & exec logs | ✅ 忽略 |
 | `generated_code/`（年 → 月 → 日） | 主程序自动存下的代码 / saved code | ✅ 忽略 |
 | `_backup/` | 根一级文件被改前的**自动备份**（按需自建）/ auto backups | ❌ 不忽略 |
@@ -689,7 +716,7 @@ launch.py
 
 这是最有趣的一块。安装器 = **脚本 + 内嵌压缩包**，同一个文件。
 
-现在目录里只有一个安装器 `FATPACKII.bat`（II 版）；早期的 `FATPACK.bat` / `FATPACKI.bat` 已归档进 `oldpackmd/`。
+现在目录里只有一个安装器 `FATPACKII.bat`（II 版）；早期的 `FATPACK.bat` / `FATPACKI.bat` 已归档进 `oldver/_cleanup_20261002/dirs/oldpackmd/`。
 
 | 安装器 / Installer | 内嵌内容 / Payload | 状态 / Status |
 |---|---|---|
@@ -741,7 +768,7 @@ launch.py
 
 | 改动 / Change | 说明 / Notes |
 |---|---|
-| ✅ **内嵌全套最新文件** | 覆盖运行全部必需件：12 个 py + 3 个 bat + `README.md` + `.gitignore`（共 17 项）|
+| ✅ **内嵌全套最新文件** | 覆盖运行全部必需件：15 个 py + 4 个 bat + `fatfish_core/` 10 个模块 + `README.md` + `.gitignore`（共 **31 项**）|
 | ✅ **补上缺失的 4 个文件** | `fatfish_runtime.bat` / `fatfish_lang.bat` / `launch.py` / `fatfish_watcher.py` |
 | ✅ **覆盖前自动备份** | 已存在的文件先拷进 `_backup/<名字>.<时间戳>.bak`，不静默吃掉旧版本 |
 | ✅ **自检增强了** | 解包后先确认 `FATHFISH.py` 真的落地了，再往下走 |
@@ -770,15 +797,16 @@ python make_fatpack.py --manifest       # 只看会内嵌哪些文件，不生�
 生成器有三重保障：① bat 外壳必须纯 ASCII，否则直接报错停手；
 ② `##PYBEGIN##` 在文件里只能出现 1 次；③ 打印每个内嵌文件的 SHA1 供比对。
 
-#### 🧪 I 版的实测结果 / Verified
+#### 🧪 安装器实测结果 / Verified
 
 | 测试 / Test | 结果 / Result |
 |---|---|
-| 载荷抽取（真调 PowerShell 按 bat 里的命令） | 退出码 0，抽出的 Python 可编译 ✅ |
-| 沙箱第一遍：全新安装 | 12 个文件全部 `新增`，退出码 0 ✅ |
-| 沙箱第二遍：覆盖更新 | 12 个文件全部 `更新` 并**各自留下备份**，`.env` 原样保留，退出码 0 ✅ |
-| 还原质量 | **12/12 逐字节一致** ✅ |
-| 沙箱产物可运行性 | 沙箱里的 `FATHFISH.py` 编译通过 ✅ |
+| `--manifest` 清单 + 审计 | 31 项，审计通过（覆盖全部本地模块依赖，含 `fatfish_core` 包）✅ |
+| `--strict` 打包 | 外壳纯 ASCII ✅ ／ 标记出现 **1** 次 ✅ ／ CRLF ✅ |
+| 载荷抽取（按 bat 里的同一条命令） | 退出码 0，抽出的 Python 可编译 ✅ |
+| 沙盒解包（模拟全新安装） | **31 个文件全部落地，failed=0**，`fatfish_core/` 目录正确创建 ✅ |
+| 还原质量 | **31/31 逐字节一致**（SHA256 比对）✅ |
+| 沙盒产物可运行性 | 剥掉主循环后 `exec` 通过；15 个依赖全部可导入 ✅ |
 
 ---
 
@@ -840,7 +868,7 @@ python make_fatpack.py --manifest       # 只看会内嵌哪些文件，不生�
 
 | 常量 | 值 | 含义 |
 |---|---|---|
-| `NET_MODE` | `auto` | 默认联网模式 |
+| `NET_MODE` | `auto` | **代码内置默认**；安装器生成的 `.env` 写的是 `ai`（推荐值，见 18.6）|
 | `TAVILY_MODE` | **`auto`** | 默认检索模式（有 URL 抓正文，否则搜索；`search`/`extract` 为强制锁定）|
 | `max_results` | 5 | 搜索返回条数 / 抓取 URL 上限 |
 | `EXTRACT_MAX_LEN` | 8,000 | 抓正文单段最大字符，超出分段 |
@@ -943,8 +971,8 @@ ws_run_cmd("dir")  /  ws_run_python(code)
 **原状**：安装器载荷里有**若干个文件是旧版本**（大小对不上现场文件），
 装出来是一套「半旧不新」的肥鱼。
 
-✅ **现已修复**：重跑生成器做了一版新安装器，随后又把原版名也重装了一遍（旧版留档）。
-现在两个安装器都逐字节校验通过（见 8.3）。
+✅ **现已修复**：重跑生成器重做安装器，载荷与现场文件逐字节校验通过（见 8.3）。
+**2026-10-02 又重建了一次**：清单扩到 31 项并修掉子目录缺陷（见「问题 5」）。
 
 ### 🟢 问题 2（已解决）：安装器曾漏掉启动链关键文件
 
@@ -959,7 +987,7 @@ ws_run_cmd("dir")  /  ws_run_python(code)
 
 **即：用旧版全新安装后，双击 `fatfish1.2.1.bat` 会直接闪退或报错。**
 
-✅ **现已修复**：两个安装器都内嵌 12 个文件，并在沙箱里各跑通了「全新安装 → 覆盖更新」两遍完整流程（见 8.4）。
+✅ **现已修复**：安装器内嵌清单现已扩到 **31 项**，并在沙箱里跑通了「全新安装 → 覆盖更新」完整流程（见 8.4）。
 
 ### 🟡 问题 3：主程序文件名拼写不一致
 
@@ -1008,11 +1036,15 @@ ws_run_cmd("dir")  /  ws_run_python(code)
 **建议偶尔按「每文件保留最近几份」清一次** —— 清理方法很简单，就是在工作台里删掉过期的 `.bak`：
 文件名里带时间戳（`原文件名.年月日_时分秒_微秒.bak`），按时间排序留新的即可。
 
-### 🟢 提醒 3：当前没有 venv
+### 🟢 提醒 3：venv 是可选的
 
-`FATPACKII.bat` 会创建 `venv/`。当前目录下若 `venv/` 和 `.venv/` 都不存在，
-（说明是全局 Python 环境在跑，或者 venv 被清理过）。
-`fatfish1.2.1.bat` 对此是容错的：找不到 venv 就用全局 Python。
+`FATPACKII.bat` 会自动创建 `venv/`（本机根目录下就有一个）。
+但 `fatfish1.2.1.bat` 对**没有 venv** 的情况完全容错：`venv/` 与 `.venv/` 都不存在时
+就用全局 Python 跑，不会报错。
+
+> ⚠️ 本机实测：`venv\Scripts\python.exe` 是个**转发壳** —— 每次执行都会再派生出
+> 一个系统 Python 子进程。所以按 PID 认进程时（例如认主程序「真身」），
+> 要留意「壳」与「真身」是两个 PID（详见 §21.4 退出信号那一条）。
 
 ### 🟢 提醒 4：`_fatfish_pid.txt` 的取法（2026-09-19 已修）
 
@@ -1046,7 +1078,7 @@ ws_run_cmd("dir")  /  ws_run_python(code)
 
 根目录曾被中间态备份堆到 **38 个文件**，其中 14 个是 `.pre_*/`.bak（合计 1.59 MB）。
 现已全部**移动**（非删除）到 **`oldver\_root_bak_cleanup_20261002\`**，
-根目录只剩 24 个常驻程序文件。归档清单与**一键还原命令**见该目录下的 `MANIFEST.md`。
+根目录只剩 25 个常驻程序文件（2026-10-02 晚重建安装器与生成器后为 26 个）。归档清单与**一键还原命令**见该目录下的 `MANIFEST.md`。
 
 > 其中 `FATHFISH.py.pre_split_20261002_172636.bak.pre_apply`（242,414 B）是拆分过程中留下的
 > 中间态 —— **拆分回滚点用的是不带 `.pre_apply` 的那份**，这一份可以放心删。
@@ -1885,7 +1917,7 @@ FATFISH_MODEL=moonshot-v1-8k
 
 | 键 | 默认 | 说明 |
 |---|---|---|
-| `NET_MODE` | `ai` | `on`=总是联网 / `off`=从不 / `auto`=关键词规则 / `ai`=第二位 AI 判定（推荐）。运行时也可 `/net on\|off\|auto\|ai` |
+| `NET_MODE` | `ai`（安装器写入值）| `on`=总是联网 / `off`=从不 / `auto`=关键词规则 / `ai`=第二位 AI 判定（推荐）。**代码内置默认是 `auto`**，但安装器生成的 `.env` 写 `ai`。运行时也可 `/net on\|off\|auto\|ai` |
 | `TAVILY_MODE` | `auto` | `auto`=AI 决定 search/extract（推荐）/ `search`、`extract`=强制锁定 / `both`=先搜索再抓前 2 条正文 |
 | `VERIFIER_MAX_TOKENS` | 10000 | 审查意见输出上限（**此处为有效值**，覆盖 E 组同名默认） |
 
@@ -1911,7 +1943,7 @@ FATFISH_MODEL=moonshot-v1-8k
    （想联网就再去 tavily.com 申请 Tavily Key，tvly- 开头）
 4. 把 Key 填进自动打开的 .env 文件（= 两边不留空格）
 5. 双击 fatfish1.2.1.bat
-6. 会开两个窗口：主窗口聊天，监控窗口看子程序输出
+6. 会开几个窗口：主窗口聊天，另有监控器 + 状态台（对话窗口默认也会弹）
 7. 开始打字聊天 🐟
 ```
 
@@ -2093,7 +2125,8 @@ QQ 直通仍是整段发送。
 
 ## 二十二、`fatfish_core` 拆分与默认工作台 / The Split & the New Default Workspace
 
-> 一句话：**主程序从 4848 行的巨无霸瘦到 3331 行**，九个部件搬进 `fatfish_core/`；
+> 一句话：**主程序从 4848 行的巨无霸瘦到 3303 行**（拆分后；当晚两项小改动又加了 20 行，
+> 现为 **3323 行**），十个部件搬进 `fatfish_core/`；
 > 同时默认工作台从 `workspace/` 改为**启动根目录**。
 > One line: **the main script got 32% smaller, and the default sandbox moved to the start-up root.**
 
@@ -2115,7 +2148,8 @@ QQ 直通仍是整段发送。
 合计 **1856 行**搬出主程序（第一批 + 第二批 1828 行 + 第三批计时器 28 行）：
 
 ```
-FATHFISH.py   4848 行 / 242.4 KB  ──拆分──►  3303 行 / 169.8 KB   （-31.9%）
+FATHFISH.py   4848 行 / 242.4 KB  ──拆分──►  3303 行 / 169.6 KB   （-31.9%）
+              ↑ 拆分前                        ↑ 拆分后（当晚另有 +20 行小改动 → 现 3323 行）
 ```
 
 ### 22.2 三条铁律（改代码前必读）/ Three Iron Rules
@@ -2224,7 +2258,7 @@ FatFish/
 ├── fatfish1.1.1.bat         ← 旧名转发壳（3 行，兼容老快捷方式）
 ├── fatfish_runtime.bat      ← 运行窗口（探语言 / 写 PID / 跑 launch）
 ├── fatfish_lang.bat         ← 语言探测（四级降级）
-├── launch.py                ← 启动枢纽（拿 PID / 拉监控器）
+├── launch.py                ← 启动枢纽（拿 PID / 拉监控器 + 状态台）
 ├── README.md                ← 本文件（第 3.5 版）
 ├── 部署记录_20261002.md      ← 最近一次部署的交接单（改了什么 / 怎么退）
 ├── .env                     ← 你的密钥（🔴 别外传）
@@ -2242,6 +2276,7 @@ FatFish/
 │   ├── setappl.py           ←   /set 各 applier（75 行）
 │   ├── envutil.py           ←   环境变量清洗与类型转换（54 行）
 │   └── __init__.py
+├── fatfish/                 ← 📦 git 仓库工作区（主程序 + 文档的完整副本，可直接运行）
 ├── workspace/               ← 🏠 工作台沙盒（日常产出都放这儿）
 ├── logs/                    ← 归档区（年 → 月 → 日：聊天日志 / 执行输出）
 ├── generated_code/          ← 肥鱼自动存的代码
