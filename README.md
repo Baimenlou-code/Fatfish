@@ -84,7 +84,7 @@ No programming knowledge needed — just follow along 👇
 | 💻 跑命令 / Run commands | 让它在工作台里执行 CMD 命令 / runs CMD commands inside the workspace |
 | 🐍 跑 Python / Run Python | 让它在工作台里跑 Python 代码，traceback 可见 / runs Python with real tracebacks |
 | 💾 自动存代码 / Auto-save code | 它写的代码块自动命名存盘（名字由 AI 起）/ auto-names and saves code blocks |
-| 🪟 实时输出窗口 / Live output window | 另开**两个**独立黑窗：监控器（滚子程序输出）+ 状态台（过程信息与报批凭证）/ two extra windows: watcher + status console |
+| 🪟 实时输出窗口 / Live output window | 另开**两个**独立黑窗：监控器（滚子程序输出）+ 状态台（过程信息与报批凭证）；加上控制台与对话窗口，一共 **4 个窗口** / 4 windows in total |
 | 🪟 对话窗口（操作台）/ Chat window | 黑底 QQ 式窗口：多行打字、拖文件与图片进来、报批点按钮、回复边收边长 / the window IS the console (Ch.21) |
 | 🌊 流式输出 / Streaming | 回复逐字上屏，不再憋到最后一次刷屏；`/stream off` 可退回 / token-by-token output (Ch.21) |
 | 🐧 上 QQ / QQ follow mode | QQ 群里的「肥鱼」就是命令行这个本体：同一份记忆、同一套工具、同一道闸门 / same brain on QQ (Ch.20) |
@@ -182,20 +182,26 @@ VERIFIER_MODEL=deepseek-flash
 
 看到彩色的肥鱼横幅就成功了 🎉 / If you see the colorful FatFish banner, you're in 🎉
 
-**⚠️ 你会看到三个窗口，这是正常的：**
+**⚠️ 你会看到四个窗口，这是正常的：**
 
-| 窗口 / Window | 标题 / Title | 干什么 / What It Does |
-|---|---|---|
-| 主窗口 / Main | `🐟 肥鱼 v1.2.1 ｜ FatFish` | 你打字聊天的地方（对话窗口会另有独立窗口）/ where you type and chat |
-| 监控窗口 / Watcher | `（自成一体）` standalone | 实时滚动显示肥鱼跑的子程序输出 / tails sub-program output |
-| 状态台 / Status | `🐟 肥鱼状态台 [FatFish Status Console]` | 过程信息、工具日志、报批凭证 / process info & approval receipts |
+| # | 窗口 / Window | 标题 / Title | 干什么 / What It Does |
+|---|---|---|---|
+| 1 | 运行窗口（控制台）/ Runtime console | `🐟 肥鱼 v1.2.1 ｜ FatFish` | **最原始的聊天界面**（命令行 REPL）；窗口化之后它仍照旧可用 / the original console REPL — still works |
+| 2 | 对话窗口 / Chat window | `🐟 肥鱼 · 对话` | **操作台**：多行打字、拖文件与图片、报批点按钮、回复边收边长（Tk 窗口，跑在主程序进程内的线程里）/ the operator console |
+| 3 | 状态台 / Status console | `🐟 肥鱼状态台 [FatFish Status Console]` | 过程信息、工具日志、报批凭证 / process info & approval receipts |
+| 4 | 监控窗口 / Watcher | **（无标题）** | 实时滚动显示肥鱼跑的子程序输出 / tails sub-program output |
 
-**这些窗口都是「独立窗口」：程序结束后不会自动关闭，需要按任意键。**
-These windows are **standalone**: they stay open after the program ends; press any key.
+**这些窗口都是「独立窗口」：程序结束后不会自动关闭，需要按任意键**
+（用 `quit` 主动退出时会被一并关掉，见第三章「退出信号」）。
+These windows are **standalone**; a clean `quit` closes them all (see Ch.3).
 
-> 💡 若开启了对话窗口（`FATFISH_WINDOW=1`，默认开），还会多一个 Tk 窗口 ——
-> 它就是操作台，可以完全替代主窗口打字。
-> 用 `quit` 主动退出时，这些窗口会被一并关掉（见第三章「退出信号」）。
+> 💡 **嫌窗口多？**
+> - `.env` 里写 `FATFISH_WINDOW=0` → 不起对话窗口（少一个）
+> - 进去后 `/window off` → 同效；`/window on` 叫回来
+> - 直接删掉 `chat_window.py` → 主程序自动退化为纯控制台，不会报错
+>
+> 🐞 已知小缺陷：监控器窗口**没有设置标题**（`fatfish_watcher.py` 里没有 `SetConsoleTitle`），
+> 正常启动时它显示的是终端/解释器的默认标题，容易和别的窗口混淆。
 
 > 启动器自己的窗口在跑到第 4 步时会提示「按任意键关闭本启动器窗口」，
 > 按一下关掉它就行，主窗口不受影响。
@@ -320,7 +326,7 @@ launch.py（启动枢纽：一个主进程 + 两个附属窗口）
 | `部署记录_20261002.md` | 4.6 KB | 118 | 最近一次部署的**交接单**（改了什么 / 怎么退）/ deploy handover |
 | `fatfish_lang.bat` | 3.9 KB | 89 | **语言探测器**（四级降级 → `FISH_LANG`）/ language probe |
 | `.env` | 2.2 KB | 65 | 你的密钥配置（🔴 **绝不要分享 / 上传**）/ your keys |
-| `README.md` | 141.7 KB | 2417 | 就是本文件（第 3.5 版 · 2026-10-02；会随文档更新变动）/ this file |
+| `README.md` | 142.3 KB | 2423 | 就是本文件（第 3.5 版 · 2026-10-02；会随文档更新变动）/ this file |
 | `fatfish1.1.1.bat` | 593 B | 12 | 旧名**转发壳**（3 行转发，老快捷方式仍可用）/ legacy forwarder |
 | `.gitignore` | 224 B | 15 | 防误传名单（`.env` / 日志 / 运行时产物）/ ignore list |
 
@@ -1943,7 +1949,7 @@ FATFISH_MODEL=moonshot-v1-8k
    （想联网就再去 tavily.com 申请 Tavily Key，tvly- 开头）
 4. 把 Key 填进自动打开的 .env 文件（= 两边不留空格）
 5. 双击 fatfish1.2.1.bat
-6. 会开几个窗口：主窗口聊天，另有监控器 + 状态台（对话窗口默认也会弹）
+6. 一共会开 4 个窗口：控制台（旧界面）+ 对话窗口 + 状态台 + 监控器
 7. 开始打字聊天 🐟
 ```
 
