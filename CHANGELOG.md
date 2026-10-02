@@ -220,12 +220,17 @@ README **第一次**拥有「📌 更新记录」章节，文档修订号从 `re
 |---|---|---|---|---|
 | `AforAminuoshouI` | `v1.0.3` | 2026-09-12 | `3027cba` | 首个公开版本 |
 | `BforBisanlang` | `v1.0.4` | 2026-09-14 | `00bb3b6` / `efe3455` | 主程序更名为 `FATGFISH.py`，启动链重构，补入打包器源码 |
-| **`CforChoubajijinggang`** | **`v1.1.1`** | **2026-09-20** | `e210a73` | 模块化重构 + `.env` 纯 ASCII 化 + README 校准（详见第六节 6.2） |
+| `CforChoubajijinggang` | `v1.1.1` | 2026-09-20 | `e210a73` | 模块化重构 + `.env` 纯 ASCII 化 + README 校准（详见第六节 6.2） |
+| `CforChoubajijinggang-enver` | `v1.1.1-en` | 2026-09-20 | `47c76ef` | 英文版（分支 `ENforEnglishi`），附件 `FATPACKEN.bat` |
+| **`DforDasi`** | **`v1.2.1`** | **2026-10-02** | `4e0cde7` | **QQ 跟随模式 · 群聊直通 · 流式输出 · 对话窗口（操作台）· 状态台 · `fatfish_core/` 拆分 · 安装器重建**（详见第十一 ~ 十四节） |
 
 - 发布地址：<https://github.com/Baimenlou-code/Fatfish/releases>
-- 远端默认分支：`main`
+- 远端默认分支：`main`；英文版在分支 `ENforEnglishi`（**v1.2.1 的英文版尚未跟进**）
 - **自 `v1.1.1` 起，仓库根目录提供 `CHANGELOG.md`（即本文件），随 git 追踪** —— 此前更新记录只存在于文档与归档中，不对 GitHub 访客可见。
-- 三个 Release 与版本标识的对应关系，见第八节「版本标识对照总表」。
+- 五个 Release（含英文版）与版本标识的对应关系，见第八节「版本标识对照总表」。
+- 每个 Release 均附带对应的**一键安装器**附件（`FATPACKII.bat` / `FATPACKEN.bat`）。
+- 自 `DforDasi` 起，仓库内文件集**包含 `fatfish_core/` 子包与新增的
+  `chat_window.py` / `stream_core.py` / `status_console.py`**（v1.1.1 时尚未拆分）。
 
 ---
 
