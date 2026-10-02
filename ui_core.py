@@ -46,6 +46,7 @@ import time
 import io
 import re
 import threading
+import unicodedata
 
 __all__ = [
     # 颜色常量
@@ -62,7 +63,11 @@ __all__ = [
     # 整块输出
     "print_banner", "print_ai",
     # 等待动画
-    "WAIT_FRAMES", "Wait",
+    "WAIT_FRAMES", "WAIT_FRAMES_REV", "Wait",
+    # 轮次落款
+    "cost_tag", "mark_footer",
+    # 个性签名 / 左下角状态行
+    "SIGNATURES", "signature", "WAIT_ANIM_DOCK", "console_status",
 ]
 
 # ============ 颜色常量 ============
@@ -77,6 +82,75 @@ BB  = "\033[94m"; BM  = "\033[95m"; BC  = "\033[96m"; BW  = "\033[97m"
 BOLD = "\033[1m"; DIM = "\033[2m"; ITAL = "\033[3m"
 UND  = "\033[4m"; RV  = "\033[7m"; ST  = "\033[9m"
 BGR  = "\033[41m"; BGG = "\033[42m"; BGY = "\033[43m"; BGB = "\033[44m"
+
+
+# ============ 个性签名（2026-10-02）============
+#   古早 QQ 的味道：细节处来一句没头没尾的话。
+#   用在：启动横幅下、退出时、对话窗口底栏。想加就往下塞。
+SIGNATURES = [
+    "签名是一种态度，我想我可以很酷。",
+    "别问，问就是在摸鱼。",
+    "人生苦短，我用 Python。",
+    "正在加载人生，请稍候…",
+    "今天的 Bug，明天的经验。",
+    "我是一条咸鱼，但我很快乐。",
+    "代码三千，只取一瓢饮。",
+    "不加班，是我最后的倔强。",
+    "世界那么大，我先修个 Bug。",
+    "吃 Token 长大的鱼。",
+    "能跑就行，别问为什么。",
+    "只要跑得够快，Bug 就追不上我。",
+    "认真的鱼最帅。",
+    "浅水喧哗，深水沉默 —— 我属于后者。",
+    "与其感慨路难行，不如马上出发。",
+    "保持热爱，奔赴山海。",
+    "心有猛虎，细嗅蔷薇。",
+    "路过人间，顺手写码。",
+    "愿你出走半生，归来仍是少年。",
+    "不问归期，只争朝夕。",
+    "做一个安静的美鱼子。",
+    "沉默是金，但沉默也扣钱。",
+    "所有的不顺，都是为了更好的相遇。",
+    "今天也要元气满满地吃 Token。",
+]
+
+
+def signature():
+    """随机取一句个性签名；取不到返回空串，绝不抛异常。"""
+    try:
+        import random as _rnd
+        return _rnd.choice(SIGNATURES)
+    except Exception:
+        return ""
+
+
+def _env_flag(name, default=True):
+    """读环境变量当开关；空值 / 非法值一律退回默认。"""
+    try:
+        import os as _o
+        v = str(_o.environ.get(name, "") or "").strip().lower()
+        if not v:
+            return bool(default)
+        return v not in ("0", "off", "false", "no", "关", "关闭")
+    except Exception:
+        return bool(default)
+
+
+def _env_str(name, default=""):
+    """读环境变量当字符串；空值退回默认（绝不抛异常）。"""
+    try:
+        import os as _o
+        v = str(_o.environ.get(name, "") or "").strip()
+        return v or default
+    except Exception:
+        return default
+
+
+# 转圈圈钉在【控制台左下角】；想退回原来的「同行原地刷新」就把环境变量设成 0
+WAIT_ANIM_DOCK = _env_flag("WAIT_ANIM_DOCK", True)
+
+# 每轮回复末尾的落款（挂在时间后面）：时间 + 本轮耗时（见 fatfish_core/roundtime.py）
+from fatfish_core.roundtime import cost_tag, mark_footer     # noqa: E402
 
 
 def fg256(n):
@@ -229,6 +303,10 @@ def print_banner():
               "│  " + sub.ljust(w - 4) + "│",
               "╰" + line + "╯"]:
         print(gradient(s, (0, 200, 255), (255, 100, 200)))
+    # ★ 个性签名：每次启动随机一句（古早 QQ 的味道）
+    _sig = signature()
+    if _sig:
+        print(paint("  ✎ " + _sig, BK, ITAL))
     print()
 
 
@@ -267,7 +345,10 @@ def print_ai(reply):
             print(render_inline(line))
             continue
         print(render_inline(line))
-    print(gradient("─" * (12 + len(head)), c1, c2))
+    # ★ 落款（2026-10-02）：收尾横线后面跟「时间 · 本轮耗时」
+    mark_footer()
+    print(gradient("─" * (12 + len(head)), c1, c2)
+          + paint(" %s%s" % (time.strftime("%H:%M:%S"), cost_tag()), BK, DIM))
     print()
 
 
@@ -284,6 +365,41 @@ def print_ai(reply):
 #     4) 帧字符全为 ASCII 等宽（- \ | /），无编码与宽度抖动风险。
 WAIT_FRAMES = "-\\|/"
 
+# 反向帧（/ | \ -）：专门给「非只读工具执行」用 —— 与「模型思考」的正向转圈
+# 方向相反，一眼就能分辨「现在是这台机器在跑」还是「模型在想」。
+WAIT_FRAMES_REV = "/|\\-"
+
+
+def _disp_width(s):
+    """终端显示宽度：CJK 全角算 2 列，其余算 1 列。
+
+    用于精确清行 —— 中文标签按 len() 算会少算一半，导致残影。
+    """
+    w = 0
+    for ch in s:
+        w += 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+    return w
+
+
+def _win_wait(kind, **kw):
+    """把等待动画的阶段变化**同步给对话窗口**（窗口没开就静默跳过）。
+
+    2026-10-02 新增：原来 - \\ | / 转圈只画在控制台上；现在同一条动画
+    也出现在窗口「消息栏前面」的状态条里。全部包在 try 里 ——
+    窗口出任何问题都不许影响控制台的转圈。
+    """
+    try:
+        import chat_window as _cw
+        if kind == "begin":
+            _cw.spin_begin(kw.get("label"))
+        elif kind == "label":
+            _cw.spin_label(kw.get("label"))
+        elif kind == "end":
+            _cw.spin_end(ok=kw.get("ok", True), label=kw.get("label"),
+                         elapsed=kw.get("elapsed", 0.0))
+    except Exception:
+        pass
+
 
 class Wait:
     r"""等待动画：- \ | / 四帧轮转 + 秒表。
@@ -299,14 +415,37 @@ class Wait:
         |  等待模型响应  0.3s
         /  等待模型响应  0.4s
         停表后该行被覆盖为:  ✅ 模型已响应（12.4s）
+
+    延迟启动 / start_delay:
+        Wait("执行命令 ...", start_delay=0.4).start()
+        若在 0.4s 内就 stop()（操作本来就很快），则**一帧都不刷、也不落结果行**，
+        屏幕上完全无痕 —— 专治「毫秒级操作闪一下」的视觉噪音。
+        超过 0.4s 才开始刷帧，行为与不设延迟时一致。0 = 立即开始（默认）。
     """
 
     FRAMES = WAIT_FRAMES
 
-    def __init__(self, label="等待", stream=None, interval=0.08, enabled=None):
+    def __init__(self, label="等待", stream=None, interval=0.08, enabled=None,
+                 frames=None, start_delay=0.0, detail=None, dock=None):
         self.label = label
         self.stream = stream if stream is not None else sys.stderr
         self.interval = max(0.03, float(interval))
+        # detail：每帧调用一次的可调用对象，返回一段「进度心跳」短文本
+        #   （例如 "↑12.3MB" / "⚠ 8m 无输出"）。用于长任务一眼看出死活。
+        self.detail = detail
+        self._last_len = 0      # 上一帧显示宽度（用于按需清行，适应变长内容）
+        # frames：自定义帧序列（例如反向的 WAIT_FRAMES_REV）。留空则用类默认 FRAMES。
+        if frames:
+            self.FRAMES = frames
+        # start_delay：延迟这么久仍未被 stop，才开始刷帧。用于「秒级完成」的操作
+        #   完全不打扰屏幕（避免闪一下）。0 = 立即开始（原行为，默认）。
+        try:
+            self.start_delay = max(0.0, float(start_delay))
+        except (TypeError, ValueError):
+            self.start_delay = 0.0
+        self._shown = False      # 是否真的刷出过帧（决定 stop 时要不要清行/落结果行）
+        self._win_on = False     # 是否已把「开始转圈」告诉对话窗口
+        self._win_label = None   # 上一次同步给窗口的阶段文案
         self._ev = threading.Event()
         self._th = None
         self._t0 = None
@@ -316,6 +455,10 @@ class Wait:
             except Exception:
                 enabled = False
         self.enabled = bool(enabled)
+        # dock：把转圈圈钉在【控制台左下角】—— 不占正文、不打扰输入行。
+        #       None = 跟随全局开关 WAIT_ANIM_DOCK；做不到会自动退回同行刷新。
+        self.dock = WAIT_ANIM_DOCK if dock is None else bool(dock)
+        self._docked = False
 
     # ---- 内部 ----
     def _emit(self, text):
@@ -325,12 +468,45 @@ class Wait:
         except Exception:
             pass
 
+    def _detail_text(self):
+        """取一次进度心跳文本；回调异常一律吞掉，绝不让动画把主程序搞崩。"""
+        if not self.detail:
+            return ""
+        try:
+            return str(self.detail() or "")
+        except Exception:
+            return ""
+
     def _loop(self):
+        # 延迟启动：在 start_delay 内就被 stop() → 直接返回，一帧都不刷，
+        # _shown 保持 False。这是「不闪一下」的关键。
+        if self.start_delay > 0 and self._ev.wait(self.start_delay):
+            return
+        self._shown = True
+        # ★ 同步给对话窗口：开始转圈（- \ | / 与控制台同一套节奏）
+        self._win_on = True
+        self._win_label = self.label
+        _win_wait("begin", label=self.label)
         i = 0
         n = len(self.FRAMES)
         while True:
-            self._emit("\r  %s  %s  %.1fs "
-                       % (self.FRAMES[i % n], self.label, time.time() - self._t0))
+            extra = self._detail_text()
+            line = "  %s  %s%s  %.1fs " % (
+                self.FRAMES[i % n], self.label,
+                ("  " + extra) if extra else "", time.time() - self._t0)
+            if self.label != self._win_label:      # 阶段变了 → 通知窗口
+                self._win_label = self.label
+                _win_wait("label", label=self.label)
+            # ★ 优先钉在【左下角】（不占正文、不打扰输入行）；
+            #   做不到（非 Win32 控制台 / 输出被重定向）就退回「同行原地刷新」。
+            if self.dock:
+                if console_status(line):
+                    self._docked = True
+                else:
+                    self.dock = False            # 能力不足 → 永久退回
+            if not self._docked:
+                self._last_len = _disp_width(line)
+                self._emit("\r" + line)
             i += 1
             if self._ev.wait(self.interval):
                 break
@@ -352,8 +528,14 @@ class Wait:
         self.label = text
         return self
 
-    def stop(self, ok=True, label=None, note=""):
-        """停止动画、清行并落一行结果；返回耗时秒数。可安全重复调用。"""
+    def stop(self, ok=True, label=None, note="", on_line=None):
+        """停止动画、清行并落一行结果；返回耗时秒数。可安全重复调用。
+
+        on_line：可选回调。传入时**本函数不自己输出**，而是把「结束行」文本
+                 交给它，由调用方决定这句话去哪（例如送到独立窗口）。
+                 传 None 时行为与原来完全一致（写 self.stream）。
+                 回调抛异常会被吞掉 —— 动画的收尾绝不能把主程序带崩。
+        """
         el = time.time() - (self._t0 or time.time())
         self._ev.set()
         if self._th is not None:
@@ -364,12 +546,301 @@ class Wait:
             self._th = None
         if label:
             self.label = label
-        if self.enabled:
-            self._emit("\r" + " " * 72 + "\r")
-        self._emit("  %s %s（%.1fs）%s\n"
-                   % ("✅" if ok else "⚠️ ", self.label, el,
-                      ("  " + note) if note else ""))
+        if self._win_on:                            # ★ 通知窗口：转圈收工
+            self._win_on = False
+            _win_wait("end", ok=ok, label=self.label, elapsed=el)
+        _line = ("  %s %s（%.1fs）%s"
+                 % ("✅" if ok else "⚠️ ", self.label, el,
+                    ("  " + note) if note else ""))
+        # 延迟期内就结束了（一帧都没刷过）→ 完全静默：不刷帧、也不落结果行，
+        # 让「快操作」在屏幕上彻底无痕。（非 TTY 的 enabled=False 不走这里，
+        # 仍保持"只报一行结果"的原语义。）
+        if self._docked:
+            console_status("", clear=True)          # 擦掉左下角那一行
+            self._docked = False
+        elif self.enabled and not self._shown:
+            return el
+        elif self.enabled:
+            # 按实际显示宽度清行（内容里可能带进度心跳，固定 72 会清不干净）
+            self._emit("\r" + " " * max(72, self._last_len + 4) + "\r")
+        if on_line is not None:
+            try:
+                on_line(_line)
+            except Exception:
+                pass
+        else:
+            self._emit(_line + "\n")
         return el
+
+
+# ============ 控制台安全插话（后台任务主动播报用）============
+#   需求：后台任务跑完时肥鱼要能「主动说话」，
+#         **但绝不能弄丢用户正在输入的那行字**。
+#   策略（保守到物理上不可能出错）：
+#     只在「用户什么都没输入」时才插话；一旦打了字就闭嘴，等回车再播报。
+#     因为我们从不触碰有内容的输入行，就不存在「保存/恢复失败」的风险
+#     （那种做法遇到中文输入法或折行就会翻车）。
+#   三重保守检查，任一不可判定即视为「不空闲」：
+#     ① Windows 控制台 API 可用；
+#     ② 没有待处理的输入事件（用户没在敲键）；
+#     ③ 提示符之后到光标之间没有任何已输入字符。
+
+_STD_OUT = -11
+_STD_IN = -10
+_k32 = None
+_CONSOLE_STATE = None
+_COORD = None
+_CSBI = None
+
+if sys.platform == "win32":
+    try:
+        import ctypes as _ct
+
+        class _COORD(_ct.Structure):
+            _fields_ = [("X", _ct.c_short), ("Y", _ct.c_short)]
+
+        class _SMALL_RECT(_ct.Structure):
+            _fields_ = [("Left", _ct.c_short), ("Top", _ct.c_short),
+                        ("Right", _ct.c_short), ("Bottom", _ct.c_short)]
+
+        class _CSBI(_ct.Structure):
+            _fields_ = [("dwSize", _COORD), ("dwCursorPosition", _COORD),
+                        ("wAttributes", _ct.c_ushort), ("srWindow", _SMALL_RECT),
+                        ("dwMaximumWindowSize", _COORD)]
+    except Exception:
+        _COORD = None
+        _CSBI = None
+
+
+def _console_ready():
+    """惰性初始化控制台 API；不可用返回 False。"""
+    global _k32, _CONSOLE_STATE
+    if _CONSOLE_STATE is not None:
+        return _CONSOLE_STATE
+    _CONSOLE_STATE = False
+    try:
+        if sys.platform == "win32" and _COORD is not None:
+            import ctypes as _ct
+            _k32 = _ct.windll.kernel32
+            _CONSOLE_STATE = True
+    except Exception:
+        _CONSOLE_STATE = False
+    return _CONSOLE_STATE
+
+
+def console_cursor():
+    """当前光标位置 (x, y)；不可判定返回 None。"""
+    if not _console_ready():
+        return None
+    try:
+        import ctypes as _ct
+        h = _k32.GetStdHandle(_STD_OUT)
+        info = _CSBI()
+        if not _k32.GetConsoleScreenBufferInfo(h, _ct.byref(info)):
+            return None
+        return int(info.dwCursorPosition.X), int(info.dwCursorPosition.Y)
+    except Exception:
+        return None
+
+
+def console_pending_keys():
+    """待处理的输入事件数；不可判定返回 None。"""
+    if not _console_ready():
+        return None
+    try:
+        import ctypes as _ct
+        h = _k32.GetStdHandle(_STD_IN)
+        n = _ct.c_ulong(0)
+        if not _k32.GetNumberOfConsoleInputEvents(h, _ct.byref(n)):
+            return None
+        return int(n.value)
+    except Exception:
+        return None
+
+
+def console_row_text(y, x0, x1):
+    """读取屏幕第 y 行 [x0, x1) 区间的文字；失败返回 None。"""
+    if not _console_ready():
+        return None
+    if x1 <= x0:
+        return ""
+    try:
+        import ctypes as _ct
+        h = _k32.GetStdHandle(_STD_OUT)
+        n = int(x1 - x0)
+        buf = _ct.create_unicode_buffer(n + 1)
+        read = _ct.c_ulong(0)
+        if not _k32.ReadConsoleOutputCharacterW(
+                h, buf, n, _COORD(int(x0), int(y)), _ct.byref(read)):
+            return None
+        return buf[:read.value]
+    except Exception:
+        return None
+
+
+def console_is_idle(prompt_x=None, prompt_y=None):
+    """用户此刻是否「空着提示符」——即可以安全插话而不破坏输入。
+
+    传入提示符结束处的 (x, y) 会启用最严格的三重检查；
+    不传则只做「无待处理按键」这一层检查。
+    """
+    if not _console_ready():
+        return False
+    pend = console_pending_keys()
+    if pend is None or pend > 0:
+        return False
+    if prompt_x is None or prompt_y is None:
+        return False
+    cur = console_cursor()
+    if cur is None:
+        return False
+    cx, cy = cur
+    if cy != prompt_y or cx < prompt_x:
+        return False            # 折行 / 位置异常 → 无法安全判定，保守拒绝
+    txt = console_row_text(cy, prompt_x, cx)
+    if txt is None:
+        return False
+    return txt.strip() == ""
+
+
+def console_clear_line(width=110):
+    """清空当前行并把光标移回行首（**仅在确认空闲后调用**）。"""
+    try:
+        sys.stdout.write("\r" + " " * max(20, int(width)) + "\r")
+        sys.stdout.flush()
+        return True
+    except Exception:
+        return False
+
+
+def console_cursor_y():
+    """当前光标所在行号；不可判定返回 None。"""
+    cur = console_cursor()
+    return None if cur is None else int(cur[1])
+
+
+def console_clear_from(y_from, y_to=None):
+    """抹掉屏幕上 [y_from, y_to] 这**整段**（含两端），并把光标放回 y_from 行首。
+
+    用途：报批「采完即扫」—— 决定一旦做出，那一段就从眼前消失，
+    主界面只留对话。凭证另行留档（见 FATHFISH._approval_receipt）。
+
+    实现：Win32 直接填空格（同时复位字符属性，避免留下彩色底）；
+    失败时退回 ANSI（先开 VT 处理）。判定不了就返回 False ——
+    调用方应放弃抹除，而不是乱抹一通。
+    """
+    if not _console_ready() or y_from is None:
+        return False
+    try:
+        import ctypes as _ct
+        y_from = int(y_from)
+        h = _k32.GetStdHandle(_STD_OUT)
+        info = _CSBI()
+        if not _k32.GetConsoleScreenBufferInfo(h, _ct.byref(info)):
+            return False
+        y_to = int(info.dwCursorPosition.Y) if y_to is None else int(y_to)
+        if y_to < y_from:
+            return False
+        width = int(info.dwSize.X)
+        if width <= 0:
+            return False
+        total = width * (y_to - y_from + 1)
+        written = _ct.c_ulong(0)
+        ok = _k32.FillConsoleOutputCharacterW(
+            h, _ct.c_wchar(" "), total, _COORD(0, y_from), _ct.byref(written))
+        if not ok:
+            return False
+        try:
+            # 一并复位字符属性：否则清成了空格但仍带着原色底
+            _k32.FillConsoleOutputAttribute(
+                h, info.wAttributes, total, _COORD(0, y_from), _ct.byref(written))
+        except Exception:
+            pass
+        return bool(_k32.SetConsoleCursorPosition(h, _COORD(0, y_from)))
+    except Exception:
+        return False
+
+
+def console_status(text, clear=False):
+    """把一行字写到【可见窗口左下角】（最后一行行首），**不移动当前光标**。
+
+    为什么用 WriteConsoleOutputCharacterW：
+      · 它直接写屏幕缓冲区，**不碰光标** → 不会打扰你正在输入的那一行；
+      · 也**不触发滚动**（不像 print 带换行会把已有内容顶上去）→ 稳定钉在左下角。
+
+    clear=True 用空格填满整行（擦掉）。
+    返回 True/False；False = 这个终端做不到，调用方应回落原行为。
+    """
+    if not _console_ready():
+        return False
+    try:
+        import ctypes as _ct
+        h = _k32.GetStdHandle(_STD_OUT)
+        info = _CSBI()
+        if not _k32.GetConsoleScreenBufferInfo(h, _ct.byref(info)):
+            return False
+        # 可见窗口的最后一行（**不是**缓冲区最后一行 —— 缓冲区可能有好几千行）
+        bottom = int(info.srWindow.Bottom)
+        width = int(info.srWindow.Right) - int(info.srWindow.Left) + 1
+        limit = width - 1                  # 留最后一格：写满有可能触发滚动
+        if limit <= 0:
+            return False
+        s = "" if clear else str(text or "")
+        # 按【显示宽度】裁（中文占 2 列），再补空格填满整行以覆盖旧内容
+        out = ""
+        for ch in s:
+            if _disp_width(out + ch) > limit:
+                break
+            out += ch
+        pad = limit - _disp_width(out)
+        if pad > 0:
+            out += " " * pad
+        buf = _ct.create_unicode_buffer(out)
+        written = _ct.c_ulong(0)
+        return bool(_k32.WriteConsoleOutputCharacterW(
+            h, buf, len(out), _COORD(0, bottom), _ct.byref(written)))
+    except Exception:
+        return False
+
+
+def console_send_enter():
+    """向控制台注入一个回车键事件（让阻塞中的 input() 返回空行）。
+
+    ⚠️ 仅在**确认用户没输入任何内容**时使用；否则会把用户的半截输入提交出去。
+    """
+    if not _console_ready():
+        return False
+    try:
+        import ctypes as _ct
+
+        class _KEY_EVENT(_ct.Structure):
+            _fields_ = [("bKeyDown", _ct.c_int),
+                        ("wRepeatCount", _ct.c_ushort),
+                        ("wVirtualKeyCode", _ct.c_ushort),
+                        ("wVirtualScanCode", _ct.c_ushort),
+                        ("uChar", _ct.c_wchar),
+                        ("dwControlKeyState", _ct.c_ulong)]
+
+        class _INPUT_RECORD(_ct.Structure):
+            _fields_ = [("EventType", _ct.c_ushort),
+                        ("_pad", _ct.c_ushort),
+                        ("Event", _KEY_EVENT)]
+
+        recs = (_INPUT_RECORD * 2)()
+        for i, down in enumerate((1, 0)):
+            recs[i].EventType = 1                      # KEY_EVENT
+            recs[i].Event.bKeyDown = down
+            recs[i].Event.wRepeatCount = 1
+            recs[i].Event.wVirtualKeyCode = 0x0D       # VK_RETURN
+            recs[i].Event.wVirtualScanCode = 0x1C
+            recs[i].Event.uChar = "\r"
+            recs[i].Event.dwControlKeyState = 0
+        h = _k32.GetStdHandle(_STD_IN)
+        written = _ct.c_ulong(0)
+        return bool(_k32.WriteConsoleInputW(
+            h, _ct.byref(recs), 2, _ct.byref(written)))
+    except Exception:
+        return False
 
 
 # ============================================================
@@ -465,6 +936,94 @@ def _selftest():
           "".join(_fr))
     check("结束行覆盖动画", "✅ 完成（" in _txt)
     check("停止后线程已回收", _w2._th is None)
+
+    # 反向帧（非只读工具执行专用）
+    _b3 = _TTY()
+    _w3 = Wait("反向", stream=_b3, enabled=True, frames=WAIT_FRAMES_REV).start()
+    time.sleep(0.3)
+    _w3.stop()
+    _fr3 = re.findall(r"\r  ([^\s])  ", _b3.getvalue())
+    check("自定义反向帧生效",
+          len(_fr3) >= 3 and all(f in WAIT_FRAMES_REV for f in _fr3), "".join(_fr3))
+    check("反向帧 = 默认帧逆序", WAIT_FRAMES_REV == WAIT_FRAMES[::-1])
+
+    # 延迟启动（start_delay）：秒级完成的操作完全静默，不"闪一下"
+    _b4 = _TTY()
+    _w4 = Wait("快操作", stream=_b4, enabled=True, start_delay=0.5).start()
+    time.sleep(0.1)
+    _w4.stop()
+    check("延迟期内 stop 完全静默", _b4.getvalue() == "", repr(_b4.getvalue()))
+
+    _b5 = _TTY()
+    _w5 = Wait("慢操作", stream=_b5, enabled=True, start_delay=0.1,
+               interval=0.05).start()
+    time.sleep(0.45)
+    _w5.stop(ok=True, label="完成")
+    check("超过延迟后照常刷帧",
+          _b5.getvalue().count("\r") >= 2 and "✅ 完成（" in _b5.getvalue(),
+          "%d 次" % _b5.getvalue().count("\r"))
+
+    _b6 = _TTY()
+    _w6 = Wait("快操作", stream=_b6, enabled=True, start_delay=0.5)
+    check("未 start 直接 stop 也不炸", _w6.stop() >= 0 and _b6.getvalue() == "")
+
+    # on_line：结束行改道（送独立窗口）—— 本屏幕不应再出现该行
+    _b8 = _TTY()
+    _got = []
+    _w8 = Wait("等待模型响应", stream=_b8, enabled=True).start()
+    time.sleep(0.25)
+    _w8.stop(ok=True, label="模型已响应", on_line=_got.append)
+    check("on_line 收到结束行",
+          len(_got) == 1 and "模型已响应" in _got[0], repr(_got[:1]))
+    check("on_line 时本屏幕不再输出该行",
+          "模型已响应" not in _b8.getvalue(), repr(_b8.getvalue()[:50]))
+
+    def _boom(_line):                     # 回调抛异常不得影响收尾
+        raise RuntimeError("故意")
+    _b9 = _TTY()
+    _w9 = Wait("x", stream=_b9, enabled=True).start()
+    time.sleep(0.15)
+    _ok9 = True
+    try:
+        _w9.stop(on_line=_boom)
+    except Exception:
+        _ok9 = False
+    check("on_line 回调异常被吞掉", _ok9)
+
+    # 进度心跳（detail 回调）
+    _calls = {"n": 0}
+
+    def _detail():
+        _calls["n"] += 1
+        if _calls["n"] == 2:
+            raise RuntimeError("回调故意报错")     # 回调异常必须被吞掉
+        return "↑1.%dMB" % _calls["n"]
+
+    _b7 = _TTY()
+    _w7 = Wait("长任务", stream=_b7, enabled=True, interval=0.05,
+               detail=_detail).start()
+    time.sleep(0.4)
+    _w7.stop(ok=True, label="完成")
+    _o7 = _b7.getvalue()
+    check("心跳文本出现在动画里", "↑1." in _o7, _o7[:60])
+    check("心跳回调异常被吞掉", "✅ 完成（" in _o7)
+
+    # 显示宽度：CJK 按 2 列算
+    check("_disp_width 中文按2列", _disp_width("中文") == 4 and _disp_width("ab") == 2)
+
+    # 控制台工具：不抛异常、返回类型正确
+    check("console_cursor 不抛", console_cursor() is None or isinstance(console_cursor(), tuple))
+    check("console_pending_keys 不抛",
+          console_pending_keys() is None or isinstance(console_pending_keys(), int))
+    check("console_is_idle 无位置参数返回 False", console_is_idle() is False)
+    check("console_is_idle 脏位置返回 False", console_is_idle(-5, -5) is False)
+    check("console_clear_line 不抛", console_clear_line() is True)
+    check("console_cursor_y 类型正确",
+          console_cursor_y() is None or isinstance(console_cursor_y(), int))
+    # 抹除：判定不了（无控制台 / 区间非法）必须返回 False，绝不乱抹
+    check("抹除 y_from=None 返回 False", console_clear_from(None) is False)
+    check("抹除倒序区间返回 False", console_clear_from(10, 5) is False)
+    check("抹除函数不抛异常", console_clear_from(0, 0) in (True, False))
     _same = Wait("x", stream=io.StringIO(), enabled=False)
     check("重复 stop 不抛异常", _same.stop() >= 0 and _same.stop() >= 0)
 

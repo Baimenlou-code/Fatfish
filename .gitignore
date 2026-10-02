@@ -8,3 +8,8 @@ __pycache__/
 chat_logs/
 workspaceX/
 oldver/
+
+# --- 运行时产物（跑一次程序就会生成，不入库）---
+.fatfish_tmp/
+_backup/
+workspace/

@@ -1,5 +1,5 @@
-# 🐟 肥鱼 FatFish —— 猪都能看懂的说明书（v1.1.1 · 文档第 3.1 版）
-# 🐟 FatFish — A Manual Even a Pig Can Understand (v1.1.1 · Doc Rev.3.1)
+# 🐟 肥鱼 FatFish —— 猪都能看懂的说明书（v1.2.1 · 文档第 3.5 版）
+# 🐟 FatFish — A Manual Even a Pig Can Understand (v1.2.1 · Doc Rev.3.5)
 
 > 一句话：**肥鱼是一个住在黑色命令行窗口里的 AI 助手。**
 > 你打字问它，它回答你；它还能帮你读写文件、上网查资料、跑命令、跑代码、看图片。
@@ -7,8 +7,8 @@
 > One line: **FatFish is an AI assistant that lives in a black command-line window.**
 > You type, it answers; it can also read/write files, search the web, run commands, run code, and look at images.
 
-**当前版本 Current version**：`v1.1.1`（横幅自称「H 版」/ banner calls itself "H Edition"）
-**文档修订 Doc revision**：第 3.1 版，2026-09-19 / Rev.3.1, 2026-09-19
+**当前版本 Current version**：`v1.2.1`（横幅自称「H 版」/ banner calls itself "H Edition"）
+**文档修订 Doc revision**：第 3.5 版，2026-10-02 / Rev.3.5, 2026-10-02
 **运行环境 Runtime**：Windows + Python 3.8+（实测 3.8.10 通过 / verified on 3.8.10）
 
 不用懂编程，照着下面做就行 👇
@@ -18,9 +18,34 @@ No programming knowledge needed — just follow along 👇
 
 ## 〇、这一版文档改了什么？ / What Changed in This Doc Revision?
 
+### 🆕 第 3.5 版（2026-10-02）：补记 9 月 24 日以来的九项升级 / Rev.3.5 — Nine Upgrades Since 2026-09-24
+
+> 上一版文档停在 2026-09-19。此后九天里肥鱼长出了一整层「装备」，本节起补记齐全，
+> 新增章节一律**中英对照**，与旧章节同格式。
+> The previous revision stopped on 2026-09-19; this one catches up on nine days of upgrades.
+
+| 升级 / Upgrade | 一句话 / One Line | 看哪一章 / See |
+|---|---|---|
+| 🐧 **QQ 跟随模式** | QQ 群里说话的就是命令行里那个「我」：同一个进程、同一份记忆、同一套工具、同一道闸门 / same process, same memory, same tools, same gates | 第二十章 |
+| 👥 **群聊直通 + 权限档位** | 群里没 @ 我的消息也照送模型（模型自己决定说不说）；非主人读免密、写要密码 / passthrough & per-role gate | 第二十章 |
+| 🎭 **表情与媒体落地** | 群里发的图与表情真能看见；肥鱼自己也能发表情 / images and stickers actually land | 第二十章 |
+| 🌊 **流式输出** | 回复边想边吐字，不再憋到最后刷一屏 / token-by-token streaming | 第二十一章 |
+| 🪟 **对话窗口（操作台）** | 黑底窗口里多行打字、拖文件与图片、报批点按钮 —— 窗口就是操作台 / the window IS the console | 第二十一章 |
+| 🎨 **状态台与输出路由** | 主界面只留对话与警告，过程信息交状态台与监控器 / the main screen stays clean | 第二十一章 |
+| 🧩 **主程序拆分 `fatfish_core/`** | 1856 行搬出主程序，十个部件独立成包 / ten parts moved out into a package | 第二十二章 |
+| ⏱️ **落款带上本轮耗时** | 回复末尾从死字符串 `本轮 ahbmc.ds` 改为真实的 `⏱️ 本轮 44.8s` / real round cost in the footer | 第二十一章 |
+| 🏠 **默认工作台 = 启动根目录** | 默认作业区不再是 `workspace/`，但作业约定仍是「尽量把产出写在 `workspace/` 里」/ default workspace root changed | 第二十二章 |
+| 🚀 **版本号 `v1.2.1`** | 48 处 / 6 个文件；启动器改名 `fatfish1.2.1.bat`（旧名留 3 行转发壳）/ version bump | 第二十二章 |
+
+> 📦 完整编年史见 `oldver/CHANGELOG.md` 的**第十一 ~ 十四节**（09-24 / 09-25 / 间歇期 / 10-02）。
+> Full chronicle: chapters 11–14 of `oldver/CHANGELOG.md`.
+>
+> 下面这张表是**第 2 版**（`rev.2`）当年与上一版旧文档的对比，保留原样作为历史痕迹。
+> The table below is the original rev.2 comparison, kept as-is for the record.
+
 | 项目 / Item | 旧文档 / Old Doc | 新文档 / New Doc |
 |---|---|---|
-| 启动器文件名 / Launcher name | `fatfish1.0.2.bat` ❌ | ✅ `fatfish1.1.1.bat` |
+| 启动器文件名 / Launcher name | `fatfish1.0.2.bat` ❌ | ✅ `fatfish1.2.1.bat` |
 | 主程序文件名 / Main script | `FATFFISHI.py` ❌ | ✅ `FATHFISH.py` |
 | 启动链路 / Launch chain | 没写 / not documented | ✅ 四层链路全图解 / full 4-layer diagram |
 | 监控器窗口 / Watcher window | 没写 / not documented | ✅ 独立说明 / its own chapter |
@@ -37,6 +62,11 @@ No programming knowledge needed — just follow along 👇
 > **`oldver/CHANGELOG.md`**
 > The changelog has been moved out and consolidated into `oldver/CHANGELOG.md`.
 > 本节原有 `rev.2` ~ `rev.3.1` 全部条目已完整并入该文件，无遗漏。
+>
+> 📌 **2026-10-02 补记**：此后又添了四节 —— 第十一节（09-24 QQ 桥接与自由跑）、
+> 第十二节（09-25 唤醒修复 / 群聊直通 / 权限档位 / 媒体落地）、第十三节（09-27 ~ 10-01 间歇期）、
+> 第十四节（10-02 装备升级）。本 README 新添的**第二十 ~ 二十二章**即第十四节的展开版。
+> Four more chapters (11–14) now cover 2026-09-24 → 2026-10-02.
 
 ---
 
@@ -55,6 +85,10 @@ No programming knowledge needed — just follow along 👇
 | 🐍 跑 Python / Run Python | 让它在工作台里跑 Python 代码，traceback 可见 / runs Python with real tracebacks |
 | 💾 自动存代码 / Auto-save code | 它写的代码块自动命名存盘（名字由 AI 起）/ auto-names and saves code blocks |
 | 🪟 实时输出窗口 / Live output window | 另开一个黑窗，实时滚动显示子程序输出 / a 2nd window tails sub-program output |
+| 🪟 对话窗口（操作台）/ Chat window | 黑底 QQ 式窗口：多行打字、拖文件与图片进来、报批点按钮、回复边收边长 / the window IS the console (Ch.21) |
+| 🌊 流式输出 / Streaming | 回复逐字上屏，不再憋到最后一次刷屏；`/stream off` 可退回 / token-by-token output (Ch.21) |
+| 🐧 上 QQ / QQ follow mode | QQ 群里的「肥鱼」就是命令行这个本体：同一份记忆、同一套工具、同一道闸门 / same brain on QQ (Ch.20) |
+| ⏰ 后台长任务 / Background jobs | 提交即返回 `job_id`，跑完自动播报；`/jobs` 看、`/kill` 停 / submit and forget, auto-report |
 | 🌏 多语言 / Multi-language | 探测系统语言，中文系统给中文界面 / probes system language |
 
 ---
@@ -144,7 +178,7 @@ VERIFIER_MODEL=deepseek-flash
 
 ### 第 4 步：启动！ / Step 4: Launch!
 
-**双击 `fatfish1.1.1.bat`**。/ **Double-click `fatfish1.1.1.bat`.**
+**双击 `fatfish1.2.1.bat`**。/ **Double-click `fatfish1.2.1.bat`.**
 
 看到彩色的肥鱼横幅就成功了 🎉 / If you see the colorful FatFish banner, you're in 🎉
 
@@ -152,7 +186,7 @@ VERIFIER_MODEL=deepseek-flash
 
 | 窗口 / Window | 标题 / Title | 干什么 / What It Does |
 |---|---|---|
-| 主窗口 / Main | `🐟 FatFish Runtime v1.1.1` | 你打字聊天的地方 / where you type and chat |
+| 主窗口 / Main | `🐟 FatFish Runtime v1.2.1` | 你打字聊天的地方 / where you type and chat |
 | 监控窗口 / Watcher | （自成一体）/ standalone | 实时滚动显示肥鱼跑的子程序输出 / tails sub-program output |
 
 **两个窗口都是「独立窗口」：程序结束后不会自动关闭，需要按任意键。**
@@ -173,7 +207,7 @@ Type `/reload` at the FatFish prompt.
 这是**旧文档完全没写**、但最容易踩坑的地方。/ This is what the old doc completely missed.
 
 ```
-你双击 fatfish1.1.1.bat
+你双击 fatfish1.2.1.bat
         │
         │  ① 检查 python 命令在不在 PATH
         │  ② 有 venv / .venv 就激活
@@ -181,7 +215,7 @@ Type `/reload` at the FatFish prompt.
         │  ④ 没有 .env 就生成模板并要求填 key
         │  ⑤ start "" cmd /k "fatfish_runtime.bat"   ← 开新窗口
         ▼
-fatfish_runtime.bat（新窗口，标题 🐟 FatFish Runtime v1.1.1）
+fatfish_runtime.bat（新窗口，标题 🐟 FatFish Runtime v1.2.1）
         │
         │  ① chcp 65001（UTF-8 代码页）
         │  ② call fatfish_lang.bat   ← 探测系统语言 → FISH_LANG=zh / en
@@ -230,56 +264,67 @@ launch.py
 
 ## 四、文件都是干啥的？ / File Overview
 
-### 4.1 一级文件（19 个 / 常驻）/ Top-level files (19)
+### 4.1 一级文件（25 个 / 常驻）/ Top-level files (25)
 
 > 口径：根目录**常驻**文件；`_fatfish_pid.txt` 属运行时产物（退出即删），不计入。
+> 安装器 `FATPACKII.bat` 与生成器 `make_fatpack.py` 于 2026-10-02 **重建并回到根目录**
+> （内嵌清单扩到 31 项，见 §8.3 与第十二章「问题 5」）。
 
 | 文件 / File | 大小 / Size | 行数 / Lines | 干啥的 / Purpose |
 |---|---|---|---|
-| `FATPACKII.bat` | 654.0 KB | 319 | ✅ **一键安装器**（II 版，内嵌 17 个最新文件）/ the one-click installer |
-| `fatfish1.1.1.bat` | 6.5 KB | 106 | **启动器**（先查环境再开新窗口）/ launcher |
-| `fatfish_runtime.bat` | 5.4 KB | 106 | **运行窗口**（探语言、取本窗口 PID、跑 launch.py）/ runtime window |
-| `fatfish_lang.bat` | 3.9 KB | 90 | **语言探测器**（四级降级 → `FISH_LANG`）/ language probe |
-| `launch.py` | 4.5 KB | 124 | **启动枢纽**（拿 PID、拉监控器、等收尾）/ launch hub |
-| `FATHFISH.py` | 137.8 KB | 2695 | **主程序**（聊天 REPL + 工具循环 + 轮次计时 + 一键放行 + 等待动画）/ main program |
-| `fatfish_watcher.py` | 13.0 KB | 380 | **监控器**（tail 子程序输出 + 存活检测）/ watcher |
-| `workspace.py` | 27.3 KB | 732 | **工作台**（路径安全、读过凭证、备份、14 个工具）/ workspace |
+| `FATPACKII.bat` | 1184.7 KB | 341 | ★ **一键安装器**（内嵌 31 个最新文件，含 `fatfish_core/` 子包）/ one-click installer |
+| `FATHFISH.py` | 170.8 KB | 3323 | **主程序**（聊天 REPL + 工具循环 + 计时 + 放行 + 流式挂钩 + 窗口胶水）/ main program |
+| `chat_window.py` | 96.8 KB | 2430 | ★ **对话窗口（操作台）**：黑底界面 + 输入桥 + 报批按钮 + 流式气泡（第 21 章）/ chat window |
+| `stream_core.py` | 53.2 KB | 1347 | ★ **流式内核**：增量渲染状态机 + 工具调用碎片拼装（第 21 章）/ streaming core |
+| `verify_tools.py` | 63.7 KB | 1448 | **双人核验**（第二位 AI 审查员）/ dual-AI verifier |
+| `ui_core.py` | 41.1 KB | 1036 | **展示层**（颜色 / 情绪调色 / `{{}}` 标记 / 横幅 / 等待动画 / 个性签名 / 左下角转圈）/ UI core |
+| `workspace.py` | 33.9 KB | 860 | **工作台**（路径安全、读过凭证、备份、14 个工具；**默认根 = 启动根目录**）/ workspace |
+| `exec_tools.py` | 32.0 KB | 904 | **跑命令 / 跑 Python**，输出落盘 / exec engine |
+| `boot_report.py` | 29.6 KB | 750 | **开工自检**（启动环境快照 + 注入提示词）/ boot report |
+| `make_fatpack.py` | 28.8 KB | 684 | ★ **安装器生成器**（文件更新后重跑它，见 8.4）/ installer builder |
+| `status_console.py` | 25.3 KB | 681 | ★ **状态台**：过程信息 / 工具日志 / **报批凭证**的归档窗（第 21 章）/ status console |
+| `net_tools.py` | 22.6 KB | 539 | **联网**（Tavily search / extract / auto，含窗口内的状态显示）/ web tools |
+| `settings.py` | 21.5 KB | 617 | **参数系统**（`/set` 注册、快照、预设方案）/ settings registry |
+| `fatfish_watcher.py` | 18.2 KB | 502 | **监控器**（tail 子程序输出 + 存活检测 + 收尾倒计时）/ watcher |
 | `file_tools.py` | 13.5 KB | 391 | **读文件 / 目录 / 图片**、路径解析、多模态组装 / file & image IO |
-| `net_tools.py` | 9.2 KB | 239 | **联网**（Tavily search / extract / auto）/ web tools |
-| `exec_tools.py` | 10.8 KB | 343 | **跑命令 / 跑 Python**，输出落盘 / exec engine |
-| `common.py` | 4.8 KB | 148 | **公共基础件**（时间戳 / 日期分层目录，单一事实来源）/ shared utils |
-| `settings.py` | 21.5 KB | 618 | **参数系统**（`/set` 注册、快照、预设方案）/ settings registry |
-| `ui_core.py` | 18.3 KB | 478 | **展示层**（颜色 / 情绪调色 / `{{}}` 标记 / 横幅 / 等待动画）/ UI core |
-| `verify_tools.py` | 63.7 KB | 1449 | **双人核验**（第二位 AI 审查员）/ dual-AI verifier |
-| `boot_report.py` | 29.6 KB | 751 | **开工自检**（启动环境快照 + 注入提示词）/ boot report |
-| `README.md` | 112.1 KB | 2028 | 就是本文件（第 3.1 版；会随文档更新变动）/ this file |
-| `.env` | 2.2 KB | 66 | 你的密钥配置（🔴 **绝不要分享 / 上传**）/ your keys |
-| `.gitignore` | 114 B | 11 | 防误传名单（第一行 `.env`）/ ignore list |
+| `fatfish1.2.1.bat` | 6.5 KB | 105 | **启动器**（先查环境再开新窗口）/ launcher |
+| `launch.py` | 6.2 KB | 157 | **启动枢纽**（拿 PID、拉监控器、等收尾）/ launch hub |
+| `fatfish_runtime.bat` | 6.0 KB | 117 | **运行窗口**（探语言、取本窗口 PID、跑 launch.py）/ runtime window |
+| `common.py` | 4.8 KB | 147 | **公共基础件**（时间戳 / 日期分层目录，单一事实来源）/ shared utils |
+| `部署记录_20261002.md` | 4.6 KB | 118 | 最近一次部署的**交接单**（改了什么 / 怎么退）/ deploy handover |
+| `fatfish_lang.bat` | 3.9 KB | 89 | **语言探测器**（四级降级 → `FISH_LANG`）/ language probe |
+| `.env` | 2.2 KB | 65 | 你的密钥配置（🔴 **绝不要分享 / 上传**）/ your keys |
+| `README.md` | 138.0 KB | 2382 | 就是本文件（第 3.5 版 · 2026-10-02；会随文档更新变动）/ this file |
+| `fatfish1.1.1.bat` | 593 B | 12 | 旧名**转发壳**（3 行转发，老快捷方式仍可用）/ legacy forwarder |
+| `.gitignore` | 114 B | 10 | 防误传名单（第一行 `.env`）/ ignore list |
 
-> 📌 `make_fatpack.py`（安装器生成器，25.9 KB / 629 行）现在位于 `workspace/`。
+> 📌 **`fatfish_core/`**（10 个模块 / 1856 行）是主程序拆出的功能包，相当于「第 24 个成员」，
+> 但它是个目录、不是文件 —— 详见**第二十二章**。
+> 📌 **安装器已重建**：`FATPACKII.bat` 于 2026-10-02 重新打包，内嵌清单由 17 项扩到 **31 项**
+> （补上 `chat_window.py` / `stream_core.py` / `fatfish_core/` 整个子包），
+> 并修好了「载荷不支持写子目录」的缺陷 —— 详见 §8.3 与第十二章「问题 5」。
 > 📌 四份专题文档（`切换API说明.md` / `双人核验模式.md` / `核验与报批规则修订_20260919.md` /
-> `设置说明.md`）**已归档至 `oldpackmd/`**；核心内容已并入本 README 第十五~十八章。
-> 📌 `_fatfish_pid.txt`（6 B）记 runtime 窗口 PID，只在运行时短暂存在。
+> `设置说明.md`）已随 `oldpackmd/` 归档到 `oldver/_cleanup_20261002/dirs/oldpackmd/`；
+> 核心内容早已并入本 README 第十五~十八章。
+> 📌 `_fatfish_pid.txt`（7 B）记 runtime 窗口 PID，只在运行时短暂存在。
 
-### 4.2 一级目录（14 个）/ Top-level dirs (14)
+### 4.2 一级目录（10 个）/ Top-level dirs (10)
 
 | 目录 / Dir | 干啥的 / Purpose | 会被 git 忽略吗 |
 |---|---|---|
-| `workspace/` | **工作台**：肥鱼唯一能自由读写的区域；`make_fatpack.py` 也在此 / the sandbox | ❌ 不忽略 |
+| `workspace/` | **工作台（默认作业区）**：中间脚本 / 临时数据 / 实验产物都放这儿 / the sandbox & default area | ❌ 不忽略 |
+| `fatfish_core/` | ★ **功能包**：10 个模块 / 1856 行，2026-10-02 从主程序拆出（第 22 章）/ the split-out package | ❌ 不忽略 |
 | `logs/`（年 → 月 → 日） | **主程序**的聊天日志与执行输出 / chat & exec logs | ✅ 忽略 |
 | `generated_code/`（年 → 月 → 日） | 主程序自动存下的代码 / saved code | ✅ 忽略 |
-| `_backup/` | 根一级文件被改前的**自动备份** / auto backups | ❌ 不忽略 |
-| `.fatfish_tmp/` | 跑 Python 时的临时脚本 / temp scripts | ❌ 不忽略 |
+| `_backup/` | 根一级文件被改前的**自动备份**（按需自建）/ auto backups | ❌ 不忽略 |
+| `.fatfish_tmp/` | 跑 Python 时的临时脚本 + 后台任务登记 / temp scripts & job registry | ❌ 不忽略 |
 | `__pycache__/` | Python 字节码缓存 / bytecode cache | ✅ 忽略（`*.pyc`） |
-| `agents/` | Agent 模块与注册表（含 `agent_reviewer.py`）/ agent modules | ❌ 不忽略 |
 | `venv/` | Python 虚拟环境（安装器创建）/ virtualenv | ❌ 不忽略 |
-| `sub/` | 子目录测试残留 / dir-test leftovers | ❌ 不忽略 |
-| `chat_logs/` | 旧版聊天日志目录（已由 `logs/` 接管）/ legacy chat logs | ✅ 忽略 |
-| `fatfish/` | **git 仓库副本**（含 `.git/` 与独立 `venv/`）/ repo copy | ❌ 不忽略 |
-| `oldpackmd/` | 归档：旧安装器 + 4 份专题文档原文 / archived packers & docs | ❌ 不忽略 |
-| `oldver/` | 归档：历代版本 + **`CHANGELOG.md` 全量更新记录** / archive & changelog | ✅ 忽略 |
-| `workspaceX/` | 归档：早期原型（`FAT-A FISH.py` 等）/ early prototypes | ✅ 忽略 |
+| `oldver/` | 归档：历代版本 + **`CHANGELOG.md` 全量更新记录** + `_cleanup_20261002/` / archive & changelog | ✅ 忽略 |
+| `_ssh_setup/` | SSH 密钥与配置（2026-09-20 建立）/ ssh keys & config | ❌ 不忽略 |
 
+> 📌 **2026-10-02 清扫**：`agents/` / `sub/` / `chat_logs/` / `fatfish/` / `oldpackmd/` / `workspaceX/`
+> 六个目录已整批移入 `oldver/_cleanup_20261002/dirs/`（**未删除任何文件**，带回滚命令）。
 > 📌 忽略规则以 `.gitignore` 为准（`.env` / `logs/` / `generated_code/` / `__pycache__/` /
 > `*.pyc` / `chat_logs/` / `workspaceX/` / `oldver/`）。
 
@@ -338,6 +383,16 @@ launch.py
 | `/auto now` | **立刻放行本轮**剩余读写（不用等报批）/ approve the rest of this round now |
 | `/auto` | 查看放行状态 / show auto-approve status |
 | `/status` | 运行状态一览（模型/联网/工作台/核验/放行/计时/目录）/ runtime status |
+| `/window` | 对话窗口状态（窗口 / 操作台 / 报批 / 流式 各就位没）/ chat-window status |
+| `/window on` ｜ `/window off` | 开关对话窗口（关掉后控制台照旧可用）/ toggle the window |
+| `/window test` | 弹一条测试确认条 —— 验证报批交互最直接的办法 / throw a test approval bar |
+| `/stream` | 流式输出状态（开关 / 思考链 / 本会话流式轮数）/ streaming status |
+| `/stream off` ｜ `/stream think off` | 退回整段输出 ｜ 不显示思考链 / turn streaming or the think-chain off |
+| `/jobs` | 后台长任务一览（id / 状态 / 已跑时长 / 输出体积）/ list background jobs |
+| `/job <id>` | 增量查看某个后台任务的输出 / tail one job |
+| `/kill <id>` | 中止后台任务（连同子进程一起杀）/ kill a job |
+| `/bg` | 后台任务总览（与 `/jobs` 同入口）/ alias of `/jobs` |
+| `/qq` | QQ 跟随模式状态 ｜ `/qq on`、`/qq off` 开关（重启后需重新开）/ QQ follow mode |
 | `/set` | 参数中心：查看 / 修改 / 还原 / 持久化（详见第十七章）/ settings hub |
 | `/set <项> <值>` ｜ `/set save` | 改一项（本次运行生效）｜`save` 写入 `.env` 持久化 / change one；persist |
 | `/set profile <名>` | 套用预设方案：`cheap` / `strict` / `fast` / `manual` / `offline` / `debug` / `default` |
@@ -638,7 +693,7 @@ launch.py
 
 | 安装器 / Installer | 内嵌内容 / Payload | 状态 / Status |
 |---|---|---|
-| `FATPACKII.bat` | **全套最新程序文件（17 项）** | ✅ 可用 / available（推荐）/ recommended |
+| `FATPACKII.bat` | **全套最新程序文件（31 项，含 `fatfish_core/` 子包与 4 个启动脚本）** | ✅ 可用 / available（推荐）/ recommended |
 
 > 早期版本曾内嵌一份过期清单（12 项，还漏了几个必需模块），现已重做并逐个校验通过（见 8.3）。
 >
@@ -750,6 +805,9 @@ python make_fatpack.py --manifest       # 只看会内嵌哪些文件，不生�
 | `AUTO_APPROVE_ENABLED` | **`True`** | 「一键放行」总开关（报批时按 `a`/`1`）| 新增于 rev.2.3 |
 | `AUTO_APPROVE_DEFAULT` | `False` | 改成 `True` = 每轮默认已放行（完全不弹窗）| 新增于 rev.2.3 |
 | `AUTO_APPROVE_SCOPE` | **`all`** | 一键放行覆盖范围：`none` 全拦 / `writes` 仅写入 / **`all` 除敏感文件外全放行（含删除 / 执行）** | 2026-09-19 新增；同日默认由 `writes` 改为 `all` |
+| `UI_ROUTING` | **`True`** | 过程信息走**状态台**、主界面只留对话与警告；设 `0` = 退回旧行为（全部打主界面）| 2026-10-02 新增 |
+| `FATFISH_WINDOW` | **`1`** | 开机自动起对话窗口并进入操作台模式；设 `0` = 不开窗（控制台照旧）| 2026-10-02 新增 |
+| `WAIT_ANIM_DOCK` | （`.env` 可覆盖） | 转圈圈**钉在控制台左下角**（直接写屏幕缓冲区，不碰光标、不触发滚动）；设 `0` = 退回「同行原地刷新」| 2026-10-02 新增 |
 | `temperature` | 0.7 | 聊天采样温度 | — |
 | AI 命名代码的 `temperature` | 0.2 / `max_tokens` 32 / `timeout` 30 | 给代码起名字时更"保守" | — |
 
@@ -872,7 +930,7 @@ ws_run_cmd("dir")  /  ws_run_python(code)
    `chcp 65001`，否则它自己的中文注释在 GBK 控制台下会被**当成命令解析**。
 2. **非中文一律回退纯英文** —— 不搞半吊子翻译（原文注释：`No half-baked translations`）。
 
-而 `fatfish1.1.1.bat` 的提示信息则统一用 `中文 | English | 日本語 | 한국어` 四语并列。
+而 `fatfish1.2.1.bat` 的提示信息则统一用 `中文 | English | 日本語 | 한국어` 四语并列。
 
 ---
 
@@ -894,12 +952,12 @@ ws_run_cmd("dir")  /  ws_run_python(code)
 
 | 缺失文件 | 后果 |
 |---|---|
-| `fatfish_runtime.bat` | `fatfish1.1.1.bat` 里 `start cmd /k "fatfish_runtime.bat"` **找不到文件** |
+| `fatfish_runtime.bat` | `fatfish1.2.1.bat` 里 `start cmd /k "fatfish_runtime.bat"` **找不到文件** |
 | `fatfish_lang.bat` | runtime 里 `call fatfish_lang.bat` 失败 |
 | `launch.py` | runtime 里 `python launch.py` 失败 |
 | `fatfish_watcher.py` | 没有监控器窗口 |
 
-**即：用旧版全新安装后，双击 `fatfish1.1.1.bat` 会直接闪退或报错。**
+**即：用旧版全新安装后，双击 `fatfish1.2.1.bat` 会直接闪退或报错。**
 
 ✅ **现已修复**：两个安装器都内嵌 12 个文件，并在沙箱里各跑通了「全新安装 → 覆盖更新」两遍完整流程（见 8.4）。
 
@@ -920,6 +978,24 @@ ws_run_cmd("dir")  /  ws_run_python(code)
 **判断某个模型名是否存在，一律以 `/models` 接口或官方文档为准。**
 如果聊天报「模型不存在」，改 `.env` 的 `FATFISH_MODEL`（或临时 `/model <名>`），再 `/reload`。
 
+### 🟢 问题 5（已解决）：安装器载荷曾落后于主程序
+
+**症状**：`FATPACKII.bat` 的载荷是打包那一刻的快照，曾停在 v1.1.1 那一代 ——
+`chat_window.py` / `stream_core.py` / `status_console.py` / `fatfish_core/` 一个都没进去，
+装完启动必然 `ModuleNotFoundError` 闪退；且 10-02 主程清扫后安装器与生成器都不在根目录。
+
+**修法（2026-10-02 完成）**：
+
+1. `make_fatpack.py` 取回根目录，内嵌清单 **17 项 → 31 项**（补全全部模块 + `fatfish_core/` 子包）；
+2. **修掉载荷的致命缺陷**：原实现 `open(name, "wb")` 直写，遇上 `fatfish_core/policy.py`
+   会因目录不存在而失败 —— 现在写文件前先 `makedirs`；
+3. `local_py_modules()` 扩展到「含 `__init__.py` 的子目录」，否则审计**看不到整个子包**
+   （这是最隐蔽的一条：漏了子包，`audit_embed()` 也照样报「通过」）；
+4. 重跑生成器（`--strict`），并在沙盒里做**解包往返验证**：
+   31 项逐字节一致、目录结构正确、依赖可导入、能跑到主循环门口。
+
+**当前产物**：`FATPACKII.bat` 1,213,156 B / 341 行（II Edition · v1.2.1）。
+
 ### 🟢 提醒 1：`.env` 是明文密钥
 
 `FATFISH_API_KEY` / `TAVILY_API_KEY` 明文躺在磁盘上。
@@ -936,7 +1012,7 @@ ws_run_cmd("dir")  /  ws_run_python(code)
 
 `FATPACKII.bat` 会创建 `venv/`。当前目录下若 `venv/` 和 `.venv/` 都不存在，
 （说明是全局 Python 环境在跑，或者 venv 被清理过）。
-`fatfish1.1.1.bat` 对此是容错的：找不到 venv 就用全局 Python。
+`fatfish1.2.1.bat` 对此是容错的：找不到 venv 就用全局 Python。
 
 ### 🟢 提醒 4：`_fatfish_pid.txt` 的取法（2026-09-19 已修）
 
@@ -958,6 +1034,22 @@ ws_run_cmd("dir")  /  ws_run_python(code)
 > Python 主程序的 PID 比（那本来就是两个不同的数字，比了必然误报），改为检查
 > 「该 PID 是否还活着 + 映像名是否像肥鱼链路进程」，结果分五态：
 > `ok`（有效）/ `stale`（残留，提示可删）/ `suspect`（疑似误抓）/ `unknown`（查不到身份，不报警）/ `invalid`（内容不是数字）。
+
+### 🟢 提醒 5：`fatfish_core/` 拆分带来两个连带事项（2026-10-02）
+
+| 事项 | 说明 |
+|---|---|
+| ⚠️ **`patch_stream.py --revert` 已失效** | 流式函数体搬进了 `fatfish_core/`，该脚本现在只会删掉那段说明注释。要撤销流式改造，请用整体备份（见第二十二章） |
+| ⚠️ **`_BG_PROMPT_POS` 要手动同步** | 主程序里 2 处赋值后面都跟着 `_sync_qqmode_pos()`；以后新增赋值点也要跟着加，否则 QQ 看门狗会看到过期的提示符位置 |
+
+### 🟢 提醒 6：根目录的中间态备份已归档（2026-10-02）
+
+根目录曾被中间态备份堆到 **38 个文件**，其中 14 个是 `.pre_*/`.bak（合计 1.59 MB）。
+现已全部**移动**（非删除）到 **`oldver\_root_bak_cleanup_20261002\`**，
+根目录只剩 24 个常驻程序文件。归档清单与**一键还原命令**见该目录下的 `MANIFEST.md`。
+
+> 其中 `FATHFISH.py.pre_split_20261002_172636.bak.pre_apply`（242,414 B）是拆分过程中留下的
+> 中间态 —— **拆分回滚点用的是不带 `.pre_apply` 的那份**，这一份可以放心删。
 
 ---
 
@@ -1818,7 +1910,7 @@ FATFISH_MODEL=moonshot-v1-8k
 3. 去 platform.deepseek.com 申请 DeepSeek Key（sk- 开头）
    （想联网就再去 tavily.com 申请 Tavily Key，tvly- 开头）
 4. 把 Key 填进自动打开的 .env 文件（= 两边不留空格）
-5. 双击 fatfish1.1.1.bat
+5. 双击 fatfish1.2.1.bat
 6. 会开两个窗口：主窗口聊天，监控窗口看子程序输出
 7. 开始打字聊天 🐟
 ```
@@ -1828,10 +1920,257 @@ FATFISH_MODEL=moonshot-v1-8k
 
 ---
 
+## 二十、QQ 跟随模式：让「我」上 QQ / QQ Follow Mode
+
+> 一句话：**QQ 群里说话的就是命令行里那个「我」** —— 同一个进程、同一份记忆、
+> 同一套工作台工具、同一道报批 + 核验闸门。
+> One line: **The FatFish in your QQ group IS the one in your terminal.**
+
+**旁路进程，不动本体。** 桥接本体 `qq_bridge/` 是一个**独立可开关的旁路进程**
+（NapCat + OneBot 协议，默认监听 5700 端口），`FATHFISH.py` 一行没改；
+「跟随模式」把 QQ 消息变成主程序的**一条输入**，于是记忆、工具、闸门全部复用。
+
+```
+QQ 群 ──► NapCat ──► qq_bridge（旁路进程） ──► 写 inbox/*.json
+                                                      │
+                              FATHFISH.py（本体）轮询取件 ◄┘
+                                     │  与终端里打字完全同一条路
+                                     ▼
+                                  回复 ──► outbox ──► 桥接 ──► QQ 群
+```
+
+### 20.1 三种入站消息 / Three Kinds of Inbound
+
+| 你在控制台看到 | 含义 | 默认行为 |
+|---|---|---|
+| `【QQ群】<昵称> 对你说：…` | 群里有人 **@ 我** | 正常回合，回复发回群里 |
+| `【QQ群·直通】群里刚来了 N 条消息（都没有 @ 我，我一直在听）：` | **直通**：没 @ 我的消息也每条都送 | 由模型决定说不说 —— 回正文＝发出去，回 `<skip>`＝一个字都不发 |
+| `【QQ群旁听】下面这些是群里最近的发言…` | 老式**攒批旁听**（`passthrough=off` 时） | 攒够一批才送，只当背景 |
+
+> 📌 直通之前是「攒批缓冲」：攒够 8 条、隔 10 分钟、每条截 300 字、超 60 条丢最老的 ——
+> 群里聊得火热时，模型看到的永远是一堆残句。改成直通后，**看到的和你一样多**。
+
+### 20.2 权限档位 / Permission Tiers
+
+| 身份 | @ 我 | 读文件 / 列目录 / 搜索 | 写 / 删 / 执行 |
+|---|---|---|---|
+| **主人**（白名单） | ✅ 正常回 | ✅ 免密 | ✅ 免密（但仍受两道闸门约束） |
+| **非主人** | ✅ 正常回 | ✅ 免密（可开关） | 🔐 **要密码** |
+
+- 白名单之外的群**一个字都不回**（只在指定群工作）。
+- 门禁是**代码层**的，模型看不到密码本身。
+- ⚠️ 曾经有个真 bug：桥接投递时没把 `pw_enable` 带下去，于是本体永远走
+  「没配密码 → 一律放行」的短路 —— 非主人改文件也不会被要密码，**门禁形同虚设**。现已修。
+
+### 20.3 表情与媒体 / Stickers & Media
+
+| 能力 | 怎么做的 |
+|---|---|
+| 🖼️ **看见群里的图** | NapCat 一直把图片段完整给了我们，是旧适配器只留一句摘要把它扔了。新增 `media.py` 把图片 / 文件真正落地，模型能读 |
+| 😀 **发表情** | 模型只输出**标签**，程序按标签取图发送 —— 给了「想发表情」的能力，又不把文件系统的门打开 |
+| 📎 **收附件** | 附件在消息里以路径出现（`@C:\...\a.png`），复用现成的读取通路 |
+
+### 20.4 安全边界（提示词层）/ Safety Boundary at the Prompt Level
+
+每轮 QQ 回合，正文末尾都会追加一段约 380 字符的硬边界：`.env` / 密钥**不许读也不许写**、
+大面积改删在 QQ 上不做、读文件优先用只读工具、按身份（主人 / 非主人）各补一句。
+
+> 补的正是**代码拦不住**的两处：① `ws_run_python` 里写 `open('.env')`，
+> 既过得了「静态只读」判定、又没有 `path` 参数可供敏感检查，两道闸门同时旁路；
+> ② 主人的 QQ 报批是**自动放行**的，没有逐批人工确认。
+
+### 20.5 命令与开关 / Commands & Switches
+
+```
+/qq              看跟随模式状态
+/qq on           开（重启肥鱼后需重新开 —— 开关与产出记账都是内存态）
+/qq off          关
+```
+
+`qq_bridge/config.json` 侧（改完**重启桥接**生效）：
+
+| 键 / Key | 作用 / Effect |
+|---|---|
+| `link.passthrough` | 群聊直通开关（`false` 回老式攒批） |
+| `link.others_read_needs_pw` | 非主人连「读」也要密码（`true` = 最严） |
+
+### 20.6 两条运维禁忌 / Two Caveats
+
+1. **只在一个实例里 `/qq on`** —— 本机曾真的同时跑过两个 `FATHFISH.py`，
+   两个都开跟随会抢 `inbox/` 与心跳，可能出现重复回复。
+2. **改代码要重启**：QQ 模块是静态注入的；桥接改 `config.json` 要重启桥接。
+
+---
+
+## 二十一、装备升级：流式输出 · 对话窗口 · 状态台 / Equipment Upgrade (2026-10-02)
+
+> 三件装备解决三个具体难受：**回复憋到最后才刷屏**、**没窗口就没法好好打字**、
+> **主界面被过程信息刷得看不见对话**。
+> Three upgrades: streaming output, a chat window that IS the console, and a status console
+> that keeps the main screen clean.
+
+### 21.1 🌊 流式输出 / Streaming
+
+**为什么只能改程序、不能改模型**：流式是**客户端行为**，不是模型开关。
+升级前 `create()` 阻塞到最后一个 token、屏幕静止几十秒；升级后
+`create(stream=True)` 立刻拿回迭代器，增量一到就渲染。
+
+**三条硬约束与对策**：
+
+| 约束 | 对策 |
+|---|---|
+| 不能破坏工具调用 | 流式拿到的是碎片（`function.arguments` 会被切成几段）→ 内核把碎片**拼回一个结构完全兼容的对象**，下游的工具执行 / 报批 / 核验 / 日志 / QQ 直通一字未改 |
+| 不能漏出标记 | `{{green}}` 这类标记也会被切两半 → 「标签栈 + 有限回退窗口」：标记一到就上色，半截的 `{{` / `**` / 反引号一律先扣住；扣太久就**按字面吐出**，绝不吞字 |
+| 不能退化成更差 | `stream_core.py` 不在、`/stream off`、开了最终答复核验、服务端拒绝流式 → 一律**静默回退非流式**；已吐字才断线则**不重试**（重试＝重复输出） |
+
+**已知取舍（诚实清单）**：情绪横线的颜色只看开头约 64 字符（全文判定要等回复结束，那就没得流了）；
+工具调用前那句「我先看看文件…」现在会显示出来（有意为之，能看见我在干什么）；
+QQ 直通仍是整段发送。
+
+```
+/stream              看状态（开关 / 思考链 / 本会话流式轮数）
+/stream off          退回「整段输出」
+/stream think off    不显示思考链
+```
+
+### 21.2 🪟 对话窗口（操作台）/ Chat Window
+
+**为什么不是「起个线程读 stdin」**：常驻线程阻塞在 `input()` 上会一直攥着 stdin 的锁，
+解释器退出时 Python 直接抛**进程级致命错误** `0xC0000409`（`try/except` 兜不住）。
+所以改成**轮询**：主循环每 0.1 秒轮一圈 —— 窗口队列有消息就直接取，控制台有按键就交给
+`input()` 读，顺手再看一眼 QQ。**没有线程 → 没有锁 → 没有致命错误。**
+
+| 能力 | 升级前 | 现在 |
+|---|---|---|
+| 窗口发消息 | 靠「往控制台注入回车」唤醒，会超时 | 主循环直接轮询队列，**0.1 秒内必取到** |
+| 控制台输入 | 独占 | **照样能用**，与窗口并列，先到的先算 |
+| 报批确认 | 只能在控制台敲 `y/n` | **窗口里弹确认条 + 按钮**，也能直接敲 `y/a/n` |
+| 回复显示 | 整段一次性出现 | 窗口气泡里**边收边长**（带颜色 / 代码块） |
+| 过程信息 | 只印在控制台 | 控制台 + 窗口「日志」页（ANSI 颜色还原） |
+
+窗口长相：**黑底 + 输入区上方 1px 纯白分割线 + 宋体 12pt**，底栏右侧每来一条回复换一句
+**个性签名**，😊 按钮打开表情框。拖拽在非 Windows 上降级为「📎 按钮 + Ctrl+V」。
+
+```
+/window              看状态（窗口 / 操作台模式 / 输出镜像 / 报批 / 流式 各就位没）
+/window off          关窗（控制台照旧，主循环仍在轮询模式）
+/window on           再叫回来
+/window test         弹一条测试确认条 —— 验证报批交互最直接的办法
+```
+
+> 💡 不想要窗口：`.env` 里加 `FATFISH_WINDOW=0`，或直接删掉 `chat_window.py` ——
+> 主程序找不到它会**自动退化为纯控制台，不会报错**。
+
+### 21.3 🎨 状态台与输出路由 / Status Console & Output Routing
+
+| 去处 | 装什么 |
+|---|---|
+| 🖥 **主界面** | 只有**对话**与**警告** |
+| 📋 **状态台**（`status_console.py`） | 过程信息、工具日志、**报批凭证**（原先「采完即扫」抹掉后就只剩监控器有记录） |
+| 👁 **监控器** | 子程序输出（`exec_*.out`，两处共用同一份落盘文件） |
+
+回退开关：`.env` 里加 `UI_ROUTING=0`，过程信息立刻回主界面。
+
+### 21.4 界面细节 / UI Details
+
+- **个性签名**（`SIGNATURES`，24 句）撒在三处：启动横幅下、退出语后、对话窗口底栏右侧
+- **转圈圈钉在控制台左下角**：直接写屏幕缓冲区（`WriteConsoleOutputCharacterW`），
+  **不碰光标、不触发滚动**；做不到时自动退回「同行原地刷新」
+- **颜色收敛到单一真源** `fatfish_core/uicolors.py`（命令提示符那套配色），
+  此前散落各处的字面量颜色全部改读它
+- **落款带上本轮耗时**：回复末尾由 `时间 · 本轮 ahbmc.ds`（死字符串）改为
+  `时间 · ⏱️ 本轮 44.8s`（真实耗时）。实现搬到 `fatfish_core/roundtime.py`，
+  控制台 / 流式 / 窗口三处落款都调同一个 `cost_tag()`，**口径天然一致、本体零传参**
+  （开关用惰性 lambda 注入，`/timer off` 立刻生效）。无落款的轮次（斜杠命令）
+  仍由 `_mark_round_end()` 补一行，不会重复也不会丢
+- **退出信号带会话身份**：`.fatfish_tmp/shutdown.signal` 原先**没有任何身份信息**，
+  任何 fatfish 实例退出都会把附属窗口一起关掉（2026-10-02 真实事故）。现在信号带上主程序 PID，
+  主程序开机另写 `.fatfish_tmp/main.pid`（真身 PID —— 本机 venv 的 `python.exe` 是转发壳，
+  `launch.py` 拿到的是壳的 PID），窗口只认「自己服务的那一个主程序」写的信号；
+  旧格式信号（无 PID）仍按时间戳兼容。详见 `oldver/CHANGELOG.md` §14.3c
+
+---
+
+## 二十二、`fatfish_core` 拆分与默认工作台 / The Split & the New Default Workspace
+
+> 一句话：**主程序从 4848 行的巨无霸瘦到 3331 行**，九个部件搬进 `fatfish_core/`；
+> 同时默认工作台从 `workspace/` 改为**启动根目录**。
+> One line: **the main script got 32% smaller, and the default sandbox moved to the start-up root.**
+
+### 22.1 拆出了什么 / What Moved Out
+
+| 批次 | 模块 | 行数 | 内容 |
+|---|---|---|---|
+| ① | `envutil.py` | 54 | 环境变量清洗与类型转换（`_env_clean` / `_env_int` / `_env_bool` …） |
+| ① | `cmdcap.py` | 90 | 命令输出捕获（`_TeeStream` / `_cmd_begin` / `_cmd_finalize` …） |
+| ① | `msgs.py` | 213 | 消息分组 / 清洗 / token 估算 / 裁剪 / 代码块抽取 |
+| ① | `policy.py` | 242 | 报批判定 + **只读 Python 的静态判定**（AST，绝不执行） |
+| ② | `qqmode.py` | 973 | **QQ 前置模式**：消息收发 / 附件守卫 / 密码门禁 / 报批改道 / 直通 / 看门狗 |
+| ② | `streamhk.py` | 170 | **流式胶水层**：何时用流式、何时回退、转圈与正文交接 |
+| ② | `setappl.py` | 75 | `/set` 的各项 applier |
+| ② | `uicolors.py` | 218 | **颜色单一真源** |
+| ③ | `roundtime.py` | 121 | **轮次计时**：`_fmt_secs` / `_mark_round_start` / `_mark_round_end` / `cost_tag`（三处落款共用，详见 21.4） |
+| ② | `__init__.py` | 11 | 包说明 |
+
+合计 **1856 行**搬出主程序（第一批 + 第二批 1828 行 + 第三批计时器 28 行）：
+
+```
+FATHFISH.py   4848 行 / 242.4 KB  ──拆分──►  3303 行 / 169.8 KB   （-31.9%）
+```
+
+### 22.2 三条铁律（改代码前必读）/ Three Iron Rules
+
+| 铁律 | 说明 |
+|---|---|
+| **① 函数体逐字搬运** | 每个搬走的函数都做 AST 结构比对（`ast.dump(..., include_attributes=False)`）：第一批 **33/33**、第二批 **qqmode 35/35 + streamhk 7/7** 全部逐字一致 |
+| **② 主程序保留同名导入** | 所以**所有调用点一个字都不用改**，补丁脚本 / 文档里提到的函数名照旧可见 |
+| **③ 外部依赖用 `bind(**kw)` 注入** | 模块自己**不认识**主程序的全局量，靠主程序启动时推过去；**配置常量一律留在主程序**，由 `_sync_modcfg()` 在启动时与 `/set` 变更后推给模块 —— 留两个副本必然分叉 |
+
+三条血泪坑（都有记录）：模块默认值是 `None` 导致只读判定崩 `TypeError`；
+`globals()[X] = v` 写进了模块自己的命名空间（主程序读不到）；
+`_BG_PROMPT_POS` 是**运行时反复赋值**的，搬走快照 → 看门狗线程永远看到旧值。
+
+### 22.3 默认工作台 = 启动根目录 / Default Workspace = Start-up Root
+
+- 默认作业区从 `./workspace` 改为**启动根目录**本人；
+- 但**作业约定没变**：日常产出（中间脚本、临时数据、实验产物）请尽量写在 `workspace/` 里，
+  以保持根目录整洁 —— 只有「属于程序本身的代码 / 配置」才直接改根目录；
+- 移出默认作业区的操作仍会被拦下，需要你明确批准（`ws_cd_approve`）。
+
+### 22.4 版本号 `v1.2.1` / Version Bump
+
+| 项 | 变化 |
+|---|---|
+| 版本号 | 1.1.1 → **1.2.1**，共 **48 处 / 6 个文件**（启动器 / 运行窗 / `ui_core.py` / `README.md` / `make_fatpack.py` / `FATPACKII.bat`） |
+| 启动器 | `fatfish1.1.1.bat` → **`fatfish1.2.1.bat`**；旧文件名保留为 **3 行转发壳**，老快捷方式仍可用 |
+| 运行窗标题 | `🐟 FatFish Runtime v1.1.1` → `🐟 肥鱼 v1.2.1 ｜ FatFish` |
+
+### 22.5 回滚 / Rollback
+
+> 📦 这些回滚点在 **2026-10-02 根目录清理**时统一归档到了
+> `oldver\_root_bak_cleanup_20261002\`（只挪位置，没删文件）。
+
+```bat
+:: 回到拆分前（4848 行）
+copy /Y "E:\FATFISH\oldver\_root_bak_cleanup_20261002\FATHFISH.py.pre_split_20261002_172636.bak" "E:\FATFISH\FATHFISH.py"
+:: 仅回滚第二批（三项拆分）
+copy /Y "E:\FATFISH\oldver\_root_bak_cleanup_20261002\FATHFISH.py.pre_split2.bak" "E:\FATFISH\FATHFISH.py"
+:: 仅回滚「默认工作台改根目录」
+copy /Y "E:\FATFISH\oldver\_root_bak_cleanup_20261002\FATHFISH.py.pre_wsroot.bak" "E:\FATFISH\FATHFISH.py"
+copy /Y "E:\FATFISH\oldver\_root_bak_cleanup_20261002\workspace.py.pre_wsroot.bak" "E:\FATFISH\workspace.py"
+```
+
+> `fatfish_core/` 留着无害 —— 不 import 就没影响。
+>
+> ⚠️ 这些回滚点**早于** 2026-10-02 晚间的两项改动（`roundtime` 落款、退出信号 PID 校验），
+> 拿它们回滚会一并丢掉那两项；只想退那两项，用各自的补丁脚本 `--revert`。
+
+---
+
 ## 附录 A：一次典型会话长什么样 / Appendix A: A Typical Session
 
 ```text
-🐟 DeepSeek 联网肥鱼 H 版 v1.1.1 已启动            ← 渐变彩色横幅
+🐟 DeepSeek 联网肥鱼 H 版 v1.2.1 已启动            ← 渐变彩色横幅
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  🐟 肥鱼开工自检 · BOOT REPORT
  <日期> <时间> 周X ｜ UTC+8:00 中国标准时间
@@ -1865,12 +2204,12 @@ FATFISH_MODEL=moonshot-v1-8k
 
 ```text
 FatFish/
-├── FATPACKII.bat            ← 一键安装器（内嵌 17 个文件；⚠️ 载荷是打包时刻的快照）
-├── fatfish1.1.1.bat         ← 启动器（双击这个）
-├── fatfish_runtime.bat      ← 运行窗口（探语言 / 写 PID / 跑 launch）
-├── fatfish_lang.bat         ← 语言探测（四级降级）
-├── launch.py                ← 启动枢纽（拿 PID / 拉监控器）
-├── FATHFISH.py              ← 主程序（聊天 REPL + 工具循环）
+├── FATPACKII.bat            ← 一键安装器（内嵌 31 个文件，含 fatfish_core/ 子包）
+├── make_fatpack.py          ← 安装器生成器（文件更新后重跑它）
+├── FATHFISH.py              ← 主程序（聊天 REPL + 工具循环 + 流式挂钩 + 窗口胶水）
+├── chat_window.py           ← 对话窗口 / 操作台（黑底 + 白线 + 表情框 + 流式气泡）
+├── stream_core.py           ← 流式内核（增量渲染 + 工具调用碎片拼装）
+├── status_console.py        ← 状态台（过程信息 / 工具日志 / 报批凭证）
 ├── fatfish_watcher.py       ← 监控器（只滚启动后的新增输出）
 ├── workspace.py             ← 工作台沙盒 / 14 个工具 / 敏感文件守护
 ├── file_tools.py            ← 文件·目录·图片读取（魔数嗅探真伪）
@@ -1879,28 +2218,39 @@ FatFish/
 ├── verify_tools.py          ← 双人核验引擎（审查员 + 联网判断 + 镜像）
 ├── boot_report.py           ← 开工自检（环境快照 + 注入提示词）
 ├── settings.py              ← 参数中心（注册 / 快照 / 预设 / 持久化）
-├── ui_core.py               ← 展示层（颜色 / 情绪 / 标记 / 横幅 / 等待动画）
+├── ui_core.py               ← 展示层（颜色 / 情绪 / 标记 / 横幅 / 等待动画 / 签名）
 ├── common.py                ← 公共基础件（时间戳 / 日期分层目录）
-├── README.md                ← 本文件（第 3.1 版）
+├── fatfish1.2.1.bat         ← 启动器（双击这个）
+├── fatfish1.1.1.bat         ← 旧名转发壳（3 行，兼容老快捷方式）
+├── fatfish_runtime.bat      ← 运行窗口（探语言 / 写 PID / 跑 launch）
+├── fatfish_lang.bat         ← 语言探测（四级降级）
+├── launch.py                ← 启动枢纽（拿 PID / 拉监控器）
+├── README.md                ← 本文件（第 3.5 版）
+├── 部署记录_20261002.md      ← 最近一次部署的交接单（改了什么 / 怎么退）
 ├── .env                     ← 你的密钥（🔴 别外传）
 ├── .gitignore               ← 防误传名单
 ├── _fatfish_pid.txt         ← runtime 窗口 PID（运行时生成；启动时重写、退出即删）
 │
-├── workspace/               ← 🏠 工作台沙盒（含 make_fatpack.py）
-│   └── make_fatpack.py      ← 安装器生成器（文件更新后重跑它）
-├── logs/                    ← 归档区（年 → 月 → 日 分层：聊天日志 / 执行输出）
-├── generated_code/          ← 肥鱼自动存的代码（首次运行自动创建）
-├── _backup/                 ← 根一级文件的自动备份
-├── .fatfish_tmp/            ← 临时脚本（运行时创建，跑完删）
-├── __pycache__/             ← 字节码缓存（运行时创建）
-├── agents/                  ← Agent 模块（含 agent_reviewer.py）
+├── fatfish_core/            ← 🧩 主程序拆出的功能包（10 模块 / 1856 行）
+│   ├── qqmode.py            ←   QQ 前置模式（973 行）
+│   ├── roundtime.py         ←   轮次计时（121 行）
+│   ├── uicolors.py          ←   颜色单一真源（218 行）
+│   ├── msgs.py              ←   消息分组 / 裁剪 / token 估算（213 行）
+│   ├── policy.py            ←   报批判定 + 只读 Python 静态判定（242 行）
+│   ├── streamhk.py          ←   流式胶水层（170 行）
+│   ├── cmdcap.py            ←   命令输出捕获（90 行）
+│   ├── setappl.py           ←   /set 各 applier（75 行）
+│   ├── envutil.py           ←   环境变量清洗与类型转换（54 行）
+│   └── __init__.py
+├── workspace/               ← 🏠 工作台沙盒（日常产出都放这儿）
+├── logs/                    ← 归档区（年 → 月 → 日：聊天日志 / 执行输出）
+├── generated_code/          ← 肥鱼自动存的代码
+├── _backup/                 ← 根一级文件的自动备份（按需自建）
+├── .fatfish_tmp/            ← 临时脚本 + 后台任务登记
+├── __pycache__/             ← 字节码缓存
 ├── venv/                    ← Python 虚拟环境（安装器创建）
-├── sub/                     ← 子目录测试残留
-├── chat_logs/               ← 旧版聊天日志（已由 logs/ 接管）
-├── fatfish/                 ← git 仓库副本（含 .git/ 与独立 venv/）
-├── oldpackmd/               ← 归档：旧安装器 + 4 份专题文档原文
-├── oldver/                  ← 归档：历代版本 + CHANGELOG.md（全量更新记录）
-└── workspaceX/              ← 归档：早期原型（FAT-A FISH.py 等）
+├── _ssh_setup/              ← SSH 密钥与配置
+└── oldver/                  ← 归档：历代版本 + CHANGELOG.md + _cleanup_20261002/
 ```
 
 
@@ -1912,7 +2262,7 @@ FatFish/
 
 | 结论 / Conclusion | 怎么得出的 / How Verified |
 |---|---|
-| 启动链路四层 | 通读 `fatfish1.1.1.bat` / `fatfish_runtime.bat` / `launch.py` / `fatfish_watcher.py` |
+| 启动链路四层 | 通读 `fatfish1.2.1.bat` / `fatfish_runtime.bat` / `launch.py` / `fatfish_watcher.py` |
 | `.hex` 是纯冗余副本（已删除） | 全项目搜索引用 + 核对安装器内嵌清单 + 解码后与 `.bat` 逐字节比对 |
 | `FATPACK.bat` 重装前内嵌 8 个文件、4 个过期 | 抓出载荷字典 → 解码 → 与现场文件比对 |
 | `FATPACK.bat` 重装后内嵌 12 个全一致 | 抽载荷 → 沙箱两遍实跑 → 逐字节比对全部通过 |
@@ -1929,6 +2279,11 @@ FatFish/
 | 监控器回放修复（rev.2.8）| `ExecTailer._prime` 基线实测：新逻辑冷启动回放 **0** 行；旧逻辑会把历史整份回放（见文末彩蛋） |
 | `.env` 绑定补全（rev.2.8）| AST 清点全部 `register`，`env_name` 覆盖率 100%；相关常量改为 `_env_*` 读取并实测可覆盖 |
 | 专题文档合并（rev.3.1）| 逐字通读 4 份 md，按「机制 / 参数 / 命令 / 坑」四类提炼为第十五~十八章；并全库检索校正 3 处过时描述（`.env` 三件套、模型名改法、参数索引）|
+| QQ 模式离线验证（2026-09-25）| `free_run/test_qqmode.py` **211 行断言全绿**；`test_media.py` 约 60 项；端到端探针 A（直通 + 兜底投递）22 项全绿、探针 B（非主人 @ / 读免密 / 写要密码 / `pw_enable` 传递）18 项全绿；两份 `FATHFISH.py` 逐字节一致 |
+| 流式内核健壮性（2026-10-02）| `stream_core.py` 12 组 / 40+ 断言 + 集成 6 组 / 30 断言（含**真实注入代码**）；开发过程中这两套测试抓出 **7 个真 bug** |
+| 窗口端到端实证（2026-10-02）| `window_mode/e2e_check.py` 真弹窗 **17 项断言**：窗口输入 → 主循环取到 / 报批点按钮 / 敲 `n` / 流式气泡边收边长 / 关窗收尾 |
+| 拆分的函数体一致性（2026-10-02）| 逐函数 AST 结构比对（`ast.dump(..., include_attributes=False)`）：第一批 **33/33**、第二批 **qqmode 35/35 + streamhk 7/7** 全部逐字一致；另做「同口径顶层名字比对 + 残留引用反查 + 剥离主循环后 `exec` 一次 + 真启动一次」 |
+| 本轮文档增订的考古口径（2026-10-02）| 逐场解析 `logs/2026/09/24 ~ 10/02` 共 **24 场会话、约 20 MB** 文本，抽取「用户消息 + 工具调用清单」后归并为 CHANGELOG 第十一~十四节与本 README 第二十~二十二章；文件体积 / 行数全部实测于 2026-10-02 18:17 |
 
 ---
 
@@ -2024,4 +2379,4 @@ PowerShell 当场报 `Illegal characters in path`，安装在第 2 步就断了�
 
 > 📌 Key 怎么申请、怎么填、填错了咋办，看 **「十四、API Key 怎么申请？」**
 > 📌 真正要跑的核心只有 4 个：`FATPACKII.bat`（装）、
-> `fatfish1.1.1.bat`（启）、`.env`（配）、`FATHFISH.py`（本体）。
+> `fatfish1.2.1.bat`（启）、`.env`（配）、`FATHFISH.py`（本体）。

@@ -40,6 +40,7 @@ for _name in ("stdout", "stderr"):
 HERE = os.path.dirname(os.path.abspath(__file__))
 MAIN_SCRIPT = os.path.join(HERE, "FATHFISH.py")
 WATCHER_SCRIPT = os.path.join(HERE, "fatfish_watcher.py")
+STATUS_SCRIPT = os.path.join(HERE, "status_console.py")
 PY = sys.executable or "python"
 
 
@@ -86,6 +87,27 @@ def main():
     else:
         _say(f"  ⚠️  未找到监控器脚本 [watcher script not found]：{WATCHER_SCRIPT}")
 
+    # ---- 2.5) 启动状态台窗口 ----
+    #   主窗口 = 对话 + 报批（需要你亲手 y/n 的交互）；
+    #   过程信息（核验结论 / 工具结果 / 自动放行 / 联网判定）→ 这个独立窗口。
+    #   主程序退出后，状态台通过 --main-pid 检测到并自动关闭。
+    status_proc = None
+    if os.path.isfile(STATUS_SCRIPT):
+        try:
+            status_proc = subprocess.Popen(
+                [PY, STATUS_SCRIPT, "--main-pid", str(main_pid)],
+                cwd=HERE,
+                creationflags=0x00000010,   # CREATE_NEW_CONSOLE
+            )
+            _say(f"  ✅ 状态台已启动 [status console started] "
+                 f"PID={status_proc.pid}（独立窗口 [separate window]）")
+        except Exception as e:
+            _say(f"  ⚠️  状态台启动失败 [status console failed]：{e}"
+                 f"（过程信息将回落到主窗口 [process info falls back]）")
+    else:
+        _say(f"  ⚠️  未找到状态台脚本 [status script not found]：{STATUS_SCRIPT}"
+             f"（过程信息将回落到主窗口）")
+
     # ---- 3) 等待主程序结束 ----
     _say("  ⏳ 主程序运行中……关闭主程序后，监控器将自动进入 30 秒倒计时退出。")
     _say("  ⏳ Main program running... after it closes, the watcher will "
@@ -112,6 +134,18 @@ def main():
             _say("  ⚠️  监控器超时未退，强制结束 [watcher timeout, killing] ...")
             try:
                 watcher_proc.kill()
+            except Exception:
+                pass
+
+    # ---- 4.5) 等状态台收尾（它自己检测到主程序退出，一般会很快关掉）----
+    if status_proc is not None:
+        _say("  ⌛ 等待状态台收尾 [waiting for status console] ...")
+        try:
+            status_proc.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            _say("  ⚠️  状态台超时未退，强制结束 [status console timeout, killing] ...")
+            try:
+                status_proc.kill()
             except Exception:
                 pass
 

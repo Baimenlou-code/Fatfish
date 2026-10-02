@@ -60,6 +60,112 @@ DRAIN_INTERVAL = 1.0       # 每轮 drain 的间隔（秒）
 # Windows 下隐藏黑框
 _CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
+# ---------- 用户中止键（与 exec_tools.py 共用同一个哨兵文件）----------
+#   本窗口按 K / ESC → 写哨兵 → exec_tools 的等待循环轮询到即杀进程树。
+#   为什么在这里按键：本窗口是独立控制台，按键不会污染主窗口的输入缓冲。
+ABORT_SENTINEL = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), ".fatfish_abort.signal")
+ABORT_KEYS = (b"k", b"K", b"\x1b")   # K / ESC
+
+
+# ---------- [QUIT-CLEAN v1] 主程序退出信号 ----------
+#   主程序（FATHFISH.py）结束时会写 .fatfish_tmp/shutdown.signal；
+#   见到就立刻收尾，不再等那 30 秒倒计时（倒计时是「主程序被强杀、
+#   来不及通知」时的兜底）。比对 mtime 与自身启动时刻，避免上次残留误伤。
+_SHUTDOWN_SIGNAL = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), ".fatfish_tmp", "shutdown.signal")
+_MAIN_PID_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), ".fatfish_tmp", "main.pid")
+_T0 = time.time()
+_MAIN_PID = None          # 我该服务哪个主程序（main() 里从 argv 取）
+
+
+def _main_pid_from_file(slack=180.0):
+    """从 .fatfish_tmp/main.pid 读「主程序真身」PID；没有/太旧则返回 None。
+
+    ★ 为什么需要它：本机 venv 的 python.exe 是**转发壳**，
+      launch.py 传给我的 target_pid 是壳的 PID，而真正跑主循环、写退出
+      信号的是壳的子进程（真身）。所以这里优先读主程序自己写的文件。
+    """
+    try:
+        if os.path.getmtime(_MAIN_PID_FILE) < _T0 - float(slack):
+            return None                      # 上次运行的残留，不当真
+        with open(_MAIN_PID_FILE, "r", encoding="utf-8", errors="replace") as f:
+            v = f.read(64).strip()
+        return int(v) if v.isdigit() else None
+    except Exception:
+        return None
+
+
+def _effective_main_pid():
+    """当前该认定的主程序 PID：真身文件优先，其次命令行给的 target_pid。"""
+    return _main_pid_from_file() or _MAIN_PID
+
+
+def _signal_pid():
+    """读退出信号里的主程序 PID；旧格式（无 PID 字段）返回 None。"""
+    try:
+        with open(_SHUTDOWN_SIGNAL, "r", encoding="utf-8", errors="replace") as f:
+            raw = f.read(200).strip()
+    except Exception:
+        return None
+    parts = raw.split()
+    if not parts:
+        return None
+    try:
+        return int(parts[-1])
+    except (TypeError, ValueError):
+        return None
+
+
+def _shutdown_requested():
+    """主程序是否「有意退出」——且**这一份信号是写给我服务的那个主程序的**。
+
+    判据：① 信号比本进程启动新（防止上次残留误伤新窗口）；
+          ② 信号里的 PID == 我该服务的主程序（真身文件优先，其次 argv）。
+    兼容：旧格式信号（无 PID）或不知道服务谁时，退回纯时间戳，行为同以前。
+
+    ★ 2026-10-02 加 ②：此前只看时间戳，任何 fatfish 实例退出都会把别的
+      窗口一起关掉（真实事故）。
+    """
+    try:
+        if not os.path.exists(_SHUTDOWN_SIGNAL):
+            return False
+        if os.path.getmtime(_SHUTDOWN_SIGNAL) < _T0 - 1.0:
+            return False                     # 旧信号：不是本次运行的
+        pid = _signal_pid()
+        if pid is None:
+            return True                      # 旧格式：保持原行为
+        mine = _effective_main_pid()
+        if mine is None:
+            return True                      # 不知道服务谁：也只能认时间戳
+        return int(pid) == int(mine)
+    except Exception:
+        return False
+
+
+def _check_abort_key(lg):
+    """按 K / ESC → 请求中止正在运行的程序。非阻塞，无按键时零开销。"""
+    if sys.platform != "win32":
+        return
+    try:
+        import msvcrt
+        if not msvcrt.kbhit():
+            return
+        ch = msvcrt.getch()
+        if ch not in ABORT_KEYS:
+            return
+        try:
+            with open(ABORT_SENTINEL, "w", encoding="utf-8") as f:
+                f.write("watcher-abort")
+            lg.raw("")
+            lg.log("⛔ 收到中止键 [abort key] → 已请求中止正在运行的程序"
+                   " [abort requested]")
+        except OSError as e:
+            lg.log(f"⚠️ 写中止哨兵失败 [failed to write abort signal]：{e}")
+    except Exception:
+        pass
+
 
 # ---------- 时间戳 / 日期分层目录（统一来自 common.py）----------
 try:
@@ -259,6 +365,9 @@ def main():
         print(f"无效的主程序 PID：{sys.argv[1]}")
         return
 
+    global _MAIN_PID
+    _MAIN_PID = target_pid
+
     # 解析 --interval
     interval = DEFAULT_INTERVAL
     if "--interval" in sys.argv:
@@ -276,6 +385,8 @@ def main():
     lg.log("🐟 肥鱼监控器已启动 [FatFish Watcher started]")
     lg.log("本窗口只显示 exec_tools 子程序的实时输出 "
            "[showing exec_tools sub-program output only]")
+    lg.log("★ 按 K 或 ESC 可中止正在运行的程序 "
+           "[press K / ESC to abort the running program]")
     lg.log(f"监控目标主程序 PID [target main-program PID]：{target_pid}")
     lg.log(f"日志文件 [log file]：{log_path}")
     lg.raw("=" * 68)
@@ -289,13 +400,22 @@ def main():
     while True:
         time.sleep(interval)
 
+        # ---- [QUIT-CLEAN v1] 主程序要求立即收尾（quit / Ctrl+C）----
+        if _shutdown_requested():
+            lg.raw("")
+            lg.log("🛑 收到主程序退出信号，立即收尾 [shutdown signal received]")
+            break
+
+        # ---- 按键检测：K / ESC = 中止正在跑的程序（不阻塞、无按键则零开销）----
+        _check_abort_key(lg)
+
         # 先 tail 子程序输出
         try:
             tailer.poll(lg)
         except Exception:
             pass
 
-        alive = is_alive(target_pid)
+        alive = is_alive(_effective_main_pid() or target_pid)
 
         # 检测失败 → 跳过本轮，不误判
         if alive is None:
@@ -317,7 +437,7 @@ def main():
     # ---- 主程序关闭后：再 tail 几轮，把子程序最后的输出尾巴晾完 ----
     lg.log(f"⌛ 子程序延时收尾中 [draining sub-program output]"
            f"（约 {DRAIN_ROUNDS * DRAIN_INTERVAL:.0f} 秒）...")
-    for _ in range(DRAIN_ROUNDS):
+    for _ in range(0 if _shutdown_requested() else DRAIN_ROUNDS):
         time.sleep(DRAIN_INTERVAL)
         try:
             tailer.poll(lg)
@@ -335,7 +455,10 @@ def main():
     print("  🐟 监控器已停止记录 [watcher stopped recording]。")
     print(f"  🐟 完整日志 [full log]：{log_path}")
     print()
-    _countdown_exit(30)
+    if not _shutdown_requested():
+        _countdown_exit(30)
+    else:
+        print("  ⚡ 主程序主动退出，跳过倒计时 [skipped countdown]\n")
     print("  👋 监控器退出 [watcher exited]。")
 
 

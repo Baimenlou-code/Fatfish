@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title 🐟 FatFish Runtime v1.1.1
+title 🐟 肥鱼 v1.2.1 ｜ FatFish
 cd /d "%~dp0"
 
 REM ---- 探测系统语言，设置 FISH_LANG（zh / en）----
@@ -9,7 +9,7 @@ REM      探测只在 bat 层做，Python 侧不参与。
 call "%~dp0fatfish_lang.bat"
 
 REM ============================================================
-REM  肥鱼主程序运行窗口（由 fatfish1.1.1.bat 启动）
+REM  肥鱼主程序运行窗口（由 fatfish1.2.1.bat 启动）
 REM
 REM  本窗口负责：
 REM    1) 通过 launch.py 启动主程序 FATHFISH.py（拿到真实 PID）；
@@ -66,7 +66,7 @@ if errorlevel 1 set "SELF_PID=0"
 > "%~dp0_fatfish_pid.txt" echo %SELF_PID%
 
 REM ---- 换回好看的窗口标题 ----
-title 🐟 FatFish Runtime v1.1.1
+title 🐟 肥鱼 v1.2.1 ｜ FatFish
 
 echo.
 if "%FISH_LANG%"=="en" (
@@ -101,5 +101,17 @@ if "%FISH_LANG%"=="en" (
     echo [肥鱼主程序已结束] 退出码 [exit code]：%FISH_EXIT%
     echo [FatFish runtime ended] 按任意键关闭本窗口 [press any key to close this window]...
 )
+REM ---- [QUIT-CLEAN v1] 用户主动退出（quit / Ctrl+C）→ 连窗口一起关 ----
+REM   注意用 exit（不带 /b）：fatfish1.2.1.bat 是用 `cmd /k` 启动本文件的，
+REM   只有 exit 才能把那个 /k 的 cmd 也结束掉，窗口才会真的消失。
+if exist "%~dp0.fatfish_tmp\quit_clean" (
+    del "%~dp0.fatfish_tmp\quit_clean" >nul 2>nul
+    del "%~dp0.fatfish_tmp\shutdown.signal" >nul 2>nul
+    echo.
+    echo  [肥鱼] 正常退出，窗口自动关闭 [clean quit - closing window]
+    timeout /t 1 >nul 2>nul
+    exit
+)
+
 pause >nul
 exit /b %FISH_EXIT%

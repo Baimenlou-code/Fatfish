@@ -6,9 +6,14 @@ from datetime import datetime
 import exec_tools
 
 # ============ 工作台根目录（运行时可切换）============
+# 2026-10-02：默认工作台 = 「启动根目录」（= 本程序所在目录，也是运行时 cwd）。
+#   原先是 <程序目录>/workspace。改成根目录，是为了让 AI 能直接读写
+#   fatfish_core/、logs/、generated_code/ 这些与程序同级的目录；
+#   ★ 但日常产出仍应尽量落在 workspace/ 子目录里（见 FATHFISH.py 的系统提示词）。
+#   想恢复旧行为：在 .env 里设 WORKSPACE_DIR=<程序目录>\workspace
 DEFAULT_WORKSPACE = os.getenv(
     "WORKSPACE_DIR",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "workspace"),
+    os.path.dirname(os.path.abspath(__file__)),
 )
 
 _WORKSPACE_DIR = None
@@ -504,6 +509,37 @@ def ws_run_python(code, cwd="", timeout=30, filename=""):
         code, get_workspace(), cwd=cwd, timeout=timeout, filename=filename or None
     )
 
+
+# ============ 后台长任务（提交即返回，跑完主动播报）============
+#   什么时候用它：预计要跑几分钟到几小时的任务。
+#   同步模式（ws_run_cmd）在这期间会占住主窗口，既不能对话也看不到进度。
+def ws_bg_cmd(command, cwd="", timeout=0, desc=""):
+    """提交一条后台 CMD/Shell 命令，立即返回 job_id。"""
+    return exec_tools.bg_run_cmd(command, get_workspace(), cwd=cwd,
+                                 timeout=timeout, desc=desc)
+
+
+def ws_bg_python(code, cwd="", timeout=0, filename="", desc=""):
+    """提交一段后台 Python 代码，立即返回 job_id。"""
+    return exec_tools.bg_run_python(code, get_workspace(), cwd=cwd,
+                                    timeout=timeout, filename=filename or None,
+                                    desc=desc)
+
+
+def ws_bg_list():
+    """列出所有后台任务及其状态/耗时/输出体积。"""
+    return exec_tools.bg_list(get_workspace())
+
+
+def ws_bg_tail(job_id, offset=0, max_chars=8000):
+    """增量读取后台任务的输出（增量游标，避免重复烧上下文）。"""
+    return exec_tools.bg_tail(job_id, offset=offset, max_chars=max_chars)
+
+
+def ws_bg_kill(job_id, reason=""):
+    """中止一个后台任务（杀整棵进程树）。"""
+    return exec_tools.bg_kill(job_id, reason=reason)
+
 # ============ Function Calling 工具定义 ============
 TOOL_SCHEMAS = [
     {
@@ -699,6 +735,93 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "ws_bg_cmd",
+            "description": (
+                "【后台长任务】提交一条 CMD/Shell 命令后台执行，**立即返回 job_id 不阻塞**。"
+                "适合预计要跑几分钟到几小时的任务（训练、批处理、全市场扫描、下载等）。"
+                "提交后主窗口可以继续和用户对话；用 ws_bg_list / ws_bg_tail 查进度，"
+                "ws_bg_kill 中止。任务结束时主程序会自动播报结果，无需轮询等待。"
+                "注意：后台任务不占主窗口，因此跑完前不会有任何同步返回输出。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "要执行的命令"},
+                    "cwd": {"type": "string", "description": "相对工作台的子目录，默认工作台根目录"},
+                    "timeout": {"type": "integer", "description": "超时秒数；0 或不传 = 不限时（长任务推荐）"},
+                    "desc": {"type": "string", "description": "任务简述（展示用，例如「全市场因子重算」）"},
+                },
+                "required": ["command"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ws_bg_python",
+            "description": (
+                "【后台长任务】提交一段 Python 代码后台执行，立即返回 job_id 不阻塞。"
+                "代码写入 .fatfish_tmp 下的临时脚本后用当前解释器运行，任务结束后自动清理脚本。"
+                "适合长时间的 Python 计算。其余行为同 ws_bg_cmd。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {"type": "string", "description": "完整的 Python 代码"},
+                    "cwd": {"type": "string", "description": "相对工作台的子目录，默认工作台根目录"},
+                    "timeout": {"type": "integer", "description": "超时秒数；0 或不传 = 不限时"},
+                    "filename": {"type": "string", "description": "可选，临时脚本文件名"},
+                    "desc": {"type": "string", "description": "任务简述（展示用）"},
+                },
+                "required": ["code"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ws_bg_list",
+            "description": "查看所有后台任务的 id、状态（running/done/failed/killed/timeout）、已跑时长、输出体积。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ws_bg_tail",
+            "description": (
+                "增量读取某个后台任务的输出。用 offset 做游标：返回文本末尾会给出新的 offset，"
+                "下次带上它即可只看新增内容（避免把几小时的全部输出反复塞进上下文）。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "job_id": {"type": "string", "description": "任务 id，如 job_0923_194455_139"},
+                    "offset": {"type": "integer", "description": "从第几字节开始读；0 表示从头。默认 0"},
+                    "max_chars": {"type": "integer", "description": "本次最多返回多少字符，默认 8000"},
+                },
+                "required": ["job_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ws_bg_kill",
+            "description": "中止一个正在运行的后台任务（连同其全部子进程一起杀掉）。已结束的任务无需中止。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "job_id": {"type": "string", "description": "要中止的任务 id"},
+                    "reason": {"type": "string", "description": "可选，中止原因（记录用）"},
+                },
+                "required": ["job_id"],
+            },
+        },
+    },
 ]
 
 # ============ 工具分发 ============
@@ -717,6 +840,11 @@ _DISPATCH = {
     "ws_forget":  lambda a: ws_forget(a.get("path", "")),
     "ws_run_cmd":    lambda a: ws_run_cmd(a["command"], a.get("cwd", ""), a.get("timeout", 120)),
     "ws_run_python": lambda a: ws_run_python(a["code"], a.get("cwd", ""), a.get("timeout", 120), a.get("filename", "")),
+    "ws_bg_cmd":     lambda a: ws_bg_cmd(a["command"], a.get("cwd", ""), a.get("timeout", 0), a.get("desc", "")),
+    "ws_bg_python":  lambda a: ws_bg_python(a["code"], a.get("cwd", ""), a.get("timeout", 0), a.get("filename", ""), a.get("desc", "")),
+    "ws_bg_list":    lambda a: ws_bg_list(),
+    "ws_bg_tail":    lambda a: ws_bg_tail(a["job_id"], a.get("offset", 0), a.get("max_chars", 8000)),
+    "ws_bg_kill":    lambda a: ws_bg_kill(a["job_id"], a.get("reason", "")),
 }
 
 def call_tool(name, args):
