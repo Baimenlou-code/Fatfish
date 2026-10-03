@@ -55,6 +55,12 @@ No programming knowledge needed — just follow along 👇
 | 已知问题 / Known issues | 没写 / not documented | ✅ 实测发现 4 条 / 4 findings |
 | 章节编号 / Chapter numbers | 「三步」下面却有第 3、4 步 ❌ | ✅ 编号已理顺 / renumbered |
 
+### 🆕 2026-10-03 补记：运行窗口是生命线 / Addendum — Never Close the Runtime Window
+
+- 新增第三章小节「反例：点运行窗口的 X = 四个窗口一起死」与第十二章「提醒 7」。
+  实测：**6 个进程共用同一个控制台**，点 X 触发 `CTRL_CLOSE_EVENT` 广播 → 主程序阵亡 → 其余窗口殉葬。
+- 一句话结论：**嫌它碍眼就最小化，收工敲 `quit`，永远别点 X。**
+
 ### 📌 更新记录 / Changelog
 
 > 📦 **本节的更新记录已于 2026-09-20 剥离独立存放。**
@@ -186,7 +192,7 @@ VERIFIER_MODEL=deepseek-flash
 
 | # | 窗口 / Window | 标题 / Title | 干什么 / What It Does |
 |---|---|---|---|
-| 1 | 运行窗口（控制台）/ Runtime console | `🐟 肥鱼 v1.2.1 ｜ FatFish` | **最原始的聊天界面**（命令行 REPL）；窗口化之后它仍照旧可用 / the original console REPL — still works |
+| 1 | 运行窗口（控制台）/ Runtime console | `🐟 肥鱼 v1.2.1 ｜ FatFish` | **最原始的聊天界面**（命令行 REPL），也是**整个肥鱼的「生命线」** —— 🚨 **只许最小化，别点右上角 X**（关它＝四个窗口一起死，原理见第三章）/ the console REPL **and the lifeline of the whole process group** — never click its X |
 | 2 | 对话窗口 / Chat window | `🐟 肥鱼 · 对话` | **操作台**：多行打字、拖文件与图片、报批点按钮、回复边收边长（Tk 窗口，跑在主程序进程内的线程里）/ the operator console |
 | 3 | 状态台 / Status console | `🐟 肥鱼状态台 [FatFish Status Console]` | 过程信息、工具日志、报批凭证 / process info & approval receipts |
 | 4 | 监控窗口 / Watcher | **（无标题）** | 实时滚动显示肥鱼跑的子程序输出 / tails sub-program output |
@@ -273,6 +279,41 @@ launch.py（启动枢纽：一个主进程 + 两个附属窗口）
 > `launch.py` 拿到的 PID 是壳的，而写信号的是壳的子进程（真身）——
 > 不比对这个文件，正常退出反而会被判成「外来信号」。
 
+> 🚨 **反例：直接点运行窗口右上角的 X = 四个窗口一起死（2026-10-03 实测）**
+>
+> 运行窗口**不是「外壳」，它是整个进程组的控制台宿主**。实测（附着到该控制台、枚举其全部成员）：
+>
+> ```
+> [runtime 窗口] PID=2224   cmd.exe   cmd /k "fatfish_runtime.bat"    ← 宿主就是它
+>    ├ PID=9824    python   python "E:\FATFISH\launch.py"           ← 启动枢纽
+>    ├ PID=34544   python   "E:\FATFISH\launch.py"                  ← （venv 壳外的真身）
+>    ├ PID=20780   python   venv\Scripts\python.exe FATHFISH.py     ← 主程序（转发壳）
+>    ├ PID=35088   python   FATHFISH.py                              ← ★ 主程序真身 =「我」
+>    └ PID=19064   python   .fatfish_tmp\snippet_xxx.py              ← 连探针都在里面
+> ```
+>
+> **六个进程共用同一个控制台。** 所以点 X ≠ 杀一个父进程，而是**关闭一个控制台** ——
+> Windows 会向挂在它上面的**每一个**进程广播 `CTRL_CLOSE_EVENT`
+> （致命信号、**无法忽略**、只留约 5 秒善后）：
+>
+> 1. 主程序（35088）在广播里**直接阵亡**；
+> 2. 对话窗口随之消失 —— 它是主程序进程里的一个 **Tk 线程**，不是独立进程；
+> 3. 状态台 / 监控器各有自己的控制台、不在广播名单里，但它们的存活逻辑是
+>    「盯着主程序 PID」——目标一消失就自动关 / 倒计时退出。**它们是被殉葬的。**
+>
+> 所以「四个窗口全灭」= **1 次控制台广播 + 3 个殉葬**。日志还会干净得像没发生过：
+> 没有退出语、没写 `quit_clean`、没清 `_fatfish_pid.txt` —— 正是「被强杀」的指纹。
+>
+> | 你想干什么 | 正确做法 |
+> |---|---|
+> | 嫌运行窗口碍眼 | **最小化**它（不影响运行；只有「关」才致命）|
+> | 收工退出 | 在对话里敲 `quit`（或控制台 `Ctrl+C`）→ 写 `quit_clean` → 运行窗口自己 `exit` 带走 `/k` 的 cmd，**四个窗口干净退场** |
+> | 单独关状态台 / 监控器 / 对话窗口 | 随便关，**不影响主程序** |
+>
+> 📌 截至 2026-10-03，主程序**尚未**捕获 `CTRL_CLOSE_EVENT`
+> （源码里搜不到 `SetConsoleCtrlHandler`），这条路上目前**没有善后**；
+> 运行窗口横幅里的警告行也还没加。两项均列入待办，详见第十二章「提醒 7」。
+
 > 📌 **监控器只看「新增」输出**：它启动时会把已存在的 `exec_*.out` 记为**基线**，
 > 之后只滚动基线之后的新内容，不会再把当天 / 昨天的历史输出重刷一遍
 > （2026-09-19 修订；此前每次冷启动都会整份回放，是 watcher 日志膨胀的主因）。
@@ -326,7 +367,7 @@ launch.py（启动枢纽：一个主进程 + 两个附属窗口）
 | `部署记录_20261002.md` | 4.6 KB | 118 | 最近一次部署的**交接单**（改了什么 / 怎么退）/ deploy handover |
 | `fatfish_lang.bat` | 3.9 KB | 89 | **语言探测器**（四级降级 → `FISH_LANG`）/ language probe |
 | `.env` | 2.2 KB | 65 | 你的密钥配置（🔴 **绝不要分享 / 上传**）/ your keys |
-| `README.md` | 142.3 KB | 2423 | 就是本文件（第 3.5 版 · 2026-10-02；会随文档更新变动）/ this file |
+| `README.md` | 146.7 KB | 2489 | 就是本文件（第 3.5 版 · 2026-10-02；会随文档更新变动）/ this file |
 | `fatfish1.1.1.bat` | 593 B | 12 | 旧名**转发壳**（3 行转发，老快捷方式仍可用）/ legacy forwarder |
 | `.gitignore` | 224 B | 15 | 防误传名单（`.env` / 日志 / 运行时产物）/ ignore list |
 
@@ -1088,6 +1129,31 @@ ws_run_cmd("dir")  /  ws_run_python(code)
 
 > 其中 `FATHFISH.py.pre_split_20261002_172636.bak.pre_apply`（242,414 B）是拆分过程中留下的
 > 中间态 —— **拆分回滚点用的是不带 `.pre_apply` 的那份**，这一份可以放心删。
+
+### 🟢 提醒 7：运行窗口是「生命线」，别点它的 X（2026-10-03 实测）
+
+`fatfish_runtime.bat` 那个窗口（标题 `🐟 肥鱼 v1.2.1 ｜ FatFish`）**不是外壳，是整个进程组的控制台宿主** ——
+主程序、`launch.py`、对话窗口都挂在它身上。点右上角 X = 关闭整个控制台，Windows 向其成员广播
+`CTRL_CLOSE_EVENT`（不可忽略，约 5 秒后强制终止），**四个窗口全灭**：
+主程序被广播打死 → 对话窗口（Tk 线程）随之消失 → 状态台 / 监控器按「盯主程序 PID」的逻辑殉葬。
+
+实测证据 —— 同一控制台里的 6 个成员：
+
+```
+PID=2224   cmd.exe   cmd /k "fatfish_runtime.bat"        ← 宿主（就是它）
+  ├ PID=9824    python  launch.py
+  ├ PID=34544   python  launch.py
+  ├ PID=20780   python  venv\Scripts\python.exe FATHFISH.py
+  ├ PID=35088   python  FATHFISH.py                      ← 主程序真身 =「我」
+  └ PID=19064   python  .fatfish_tmp\snippet_xxx.py
+```
+
+- ✅ **嫌它碍眼 → 最小化**；✅ **收工 → 敲 `quit`**（干净退出，窗口一起收）
+- ❌ **永远不要点 X**
+- 🐞 **现状**：主程序尚未处理 `CTRL_CLOSE_EVENT`（无善后）；运行窗口横幅里也还没加警告行 —— 两项待办。
+
+> 这是同类事故的第二次：2026-10-02 那次是「退出信号不带身份」，任何实例退出都会连坐窗口
+> （已修，见 §21.4）；这次换了个入口、踩的是同一个坑。
 
 ---
 
