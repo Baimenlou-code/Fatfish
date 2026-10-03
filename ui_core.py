@@ -41,6 +41,7 @@ AST 依赖分析：本模块 46 个成员，**外部全局依赖数 = 0**，唯�
     python ui_core.py
 """
 
+import os
 import sys
 import time
 import io
@@ -84,42 +85,77 @@ UND  = "\033[4m"; RV  = "\033[7m"; ST  = "\033[9m"
 BGR  = "\033[41m"; BGG = "\033[42m"; BGY = "\033[43m"; BGB = "\033[44m"
 
 
-# ============ 个性签名（2026-10-02）============
-#   古早 QQ 的味道：细节处来一句没头没尾的话。
-#   用在：启动横幅下、退出时、对话窗口底栏。想加就往下塞。
-SIGNATURES = [
-    "签名是一种态度，我想我可以很酷。",
-    "别问，问就是在摸鱼。",
-    "人生苦短，我用 Python。",
-    "正在加载人生，请稍候…",
-    "今天的 Bug，明天的经验。",
-    "我是一条咸鱼，但我很快乐。",
-    "代码三千，只取一瓢饮。",
-    "不加班，是我最后的倔强。",
-    "世界那么大，我先修个 Bug。",
-    "吃 Token 长大的鱼。",
-    "能跑就行，别问为什么。",
-    "只要跑得够快，Bug 就追不上我。",
-    "认真的鱼最帅。",
-    "浅水喧哗，深水沉默 —— 我属于后者。",
-    "与其感慨路难行，不如马上出发。",
-    "保持热爱，奔赴山海。",
-    "心有猛虎，细嗅蔷薇。",
-    "路过人间，顺手写码。",
-    "愿你出走半生，归来仍是少年。",
-    "不问归期，只争朝夕。",
-    "做一个安静的美鱼子。",
-    "沉默是金，但沉默也扣钱。",
-    "所有的不顺，都是为了更好的相遇。",
-    "今天也要元气满满地吃 Token。",
-]
+# ============ 小唐话词库（外部文件 · 2026-10-03）============
+#   句子**不写在代码里** —— 放在同级目录 signatures/*.txt，一行一句。
+#   用在：启动横幅下、退出时、对话窗口底栏。
+#   加句子：往那些 txt 里塞一行即可，程序会自动感知文件变化并重载。
+#   整个目录不存在也不会报错（只是取不到签名，返回空串）。
+_SIG_DIRNAME = "signatures"
+_SIG_CACHE = {"pool": [], "stamp": None}
+
+
+def _sig_dir():
+    """词库目录（与本文件同级）。"""
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), _SIG_DIRNAME)
+
+
+def _read_sig_pool():
+    """读 signatures/*.txt：一行一句，# 开头与空行跳过。返回 (列表, 指纹)。"""
+    d = _sig_dir()
+    if not os.path.isdir(d):
+        return [], None
+    try:
+        names = sorted(f for f in os.listdir(d) if f.lower().endswith(".txt"))
+    except Exception:
+        return [], None
+    pool, stamps = [], []
+    for n in names:
+        p = os.path.join(d, n)
+        try:
+            stamps.append(os.path.getmtime(p))
+        except Exception:
+            pass
+        text = None
+        for enc in ("utf-8-sig", "utf-8", "gbk"):
+            try:
+                with io.open(p, "r", encoding=enc) as fh:
+                    text = fh.read()
+                break
+            except Exception:
+                continue
+        if not text:
+            continue
+        for line in text.splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                pool.append(line)
+    return pool, (max(stamps) if stamps else None)
+
+
+def load_signatures(force=False):
+    """取词库（带缓存；文件改动后自动重载）。任何异常都返回空列表，绝不抛。"""
+    try:
+        pool, stamp = _read_sig_pool()
+        if force or not _SIG_CACHE["pool"] or stamp != _SIG_CACHE["stamp"]:
+            _SIG_CACHE["pool"], _SIG_CACHE["stamp"] = pool, stamp
+        return _SIG_CACHE["pool"]
+    except Exception:
+        return []
+
+
+def __getattr__(name):
+    """PEP 562：让 `ui_core.SIGNATURES` 始终返回**当前**词库（不是快照）。"""
+    if name == "SIGNATURES":
+        return load_signatures()
+    raise AttributeError("module %r has no attribute %r" % (__name__, name))
 
 
 def signature():
     """随机取一句个性签名；取不到返回空串，绝不抛异常。"""
     try:
         import random as _rnd
-        return _rnd.choice(SIGNATURES)
+        pool = load_signatures()
+        return _rnd.choice(pool) if pool else ""
     except Exception:
         return ""
 

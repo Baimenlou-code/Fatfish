@@ -114,6 +114,14 @@ EMBED = [
     "fatfish_runtime.bat",    # 运行窗口
     "fatfish_lang.bat",       # 语言探测
     "fatfish1.1.1.bat",       # 旧名转发壳（3 行，兼容老快捷方式）
+    # ---- 小唐话词库（signatures/，2026-10-03）----
+    #   个性签名的句子**不写在代码里**，放这些 txt，一行一句。
+    #   用户可以自由增删改；ui_core.load_signatures() 会读它们（带 mtime 热重载）。
+    "signatures/01_classic.txt",    # 经典：咸鱼自嘲 / 文艺 / 打工人
+    "signatures/02_fish.txt",       # 鱼味特调
+    "signatures/03_tech.txt",       # 技术味特调
+    "signatures/04_real_logs.txt",  # 唐事录（真实翻车）
+    "signatures/README.md",         # 词库用法说明
     # ---- 文档与配置 ----
     "README.md",              # 说明书
     ".gitignore",             # 防误传名单
