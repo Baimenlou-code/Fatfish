@@ -121,6 +121,7 @@ EMBED = [
     "signatures/02_fish.txt",       # 鱼味特调
     "signatures/03_tech.txt",       # 技术味特调
     "signatures/04_real_logs.txt",  # 唐事录（真实翻车）
+    "signatures/05_rejected.txt",   # 打回记录（被审查员拦下的案例）
     "signatures/README.md",         # 词库用法说明
     # ---- 文档与配置 ----
     "README.md",              # 说明书
