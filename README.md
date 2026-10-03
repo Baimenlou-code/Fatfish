@@ -5,7 +5,7 @@
 >
 > 运行环境：**Windows + Python 3.8 或更新**。不用懂编程，照着下面做就行。
 
-> 📖 本文件只讲**怎么用**。内部原理、参数表、开发笔记 → **《技术手册》**（独立分支 [🔗 manual](https://github.com/Baimenlou-code/Fatfish/tree/manual)）（不随安装器分发）。
+> 📖 本文件只讲**怎么用**。内部原理、参数表、开发笔记 → **《技术手册》**（独立分支 [`manual`](https://github.com/Baimenlou-code/Fatfish/tree/manual)，不随安装器分发）。
 > 🥚 只想听八卦？直接跳到最后的 **开发彩蛋**。
 
 ---
@@ -323,7 +323,7 @@ FATFISH_MODEL=deepseek-flash
 - 旧写法 `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL` / `DEEPSEEK_MODEL` 仍然兼容（作为回退）。
 - 临时换一次模型：`/model <模型名>`（只影响本次会话）。
 - **判断某个模型名是否存在，以 `/models` 接口或官方文档为准**；报「模型不存在」就改 `FATFISH_MODEL` 再 `/reload`。
-- 完整 `.env` 配置项清单（50+ 项）见 **《技术手册》**（独立分支 [🔗 manual](https://github.com/Baimenlou-code/Fatfish/tree/manual)） 第十八章。
+- 完整 `.env` 配置项清单（50+ 项）见 [《技术手册》第十八章](https://github.com/Baimenlou-code/Fatfish/tree/manual)。
 
 ---
 
@@ -377,7 +377,7 @@ FATFISH_MODEL=deepseek-flash
 
 > ⚠️ 两条禁忌：① **只在一个实例里开** `/qq on`（同时跑两个会抢消息、可能重复回复）；
 > ② 改代码后要**重启**，改桥接的 `config.json` 要重启桥接。
-> 完整原理见 **《技术手册》**（独立分支 [🔗 manual](https://github.com/Baimenlou-code/Fatfish/tree/manual)） 与 `qq_bridge/README.md`。
+> 完整原理见 [《技术手册》](https://github.com/Baimenlou-code/Fatfish/tree/manual) 与 `qq_bridge/README.md`。
 
 ---
 
@@ -406,7 +406,7 @@ FATFISH_MODEL=deepseek-flash
 | `max_history` | `500` | 保留多少条历史消息 |
 
 > 所有开关类命令（`/net`、`/verify`、`/timer`、`/auto`）改的**都是同一批设置**，两边始终同步。
-> 完整的项清单与 preset 细节见 **《技术手册》**（独立分支 [🔗 manual](https://github.com/Baimenlou-code/Fatfish/tree/manual)） 第十七章。
+> 完整的项清单与 preset 细节见 [《技术手册》第十七章](https://github.com/Baimenlou-code/Fatfish/tree/manual)。
 
 ---
 
@@ -433,7 +433,7 @@ FATFISH_MODEL=deepseek-flash
 - 🧿 **双人核验**：肥鱼想动有副作用的东西之前，会先把方案交给**第二位 AI（审查员）**复核；
   审查员不放行，它就得「补充说明」或「换方案」重来。设置里有开关（`/verify off` 可关）。
 - 🔐 **两道闸门**：审查员 AI 一道 + 你点头一道。核验通过 ≠ 直接执行，你还是最后一道。
-- 🧩 想了解这些机制**怎么实现的**、以及所有参数、启动链路、安装器原理 —— 见 **《技术手册》**（独立分支 [🔗 manual](https://github.com/Baimenlou-code/Fatfish/tree/manual)）。
+- 🧩 想了解这些机制**怎么实现的**、以及所有参数、启动链路、安装器原理 —— 见 [《技术手册》](https://github.com/Baimenlou-code/Fatfish/tree/manual)。
 
 ---
 
