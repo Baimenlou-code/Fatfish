@@ -13,3 +13,6 @@ oldver/
 .fatfish_tmp/
 _backup/
 workspace/
+
+# --- 构建产物：安装器只随 Release 分发，不进仓库 ---
+FATPACK*.bat
