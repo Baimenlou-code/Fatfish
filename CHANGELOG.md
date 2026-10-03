@@ -649,6 +649,46 @@ README **第一次**拥有「📌 更新记录」章节，文档修订号从 `re
 
 ---
 
+---
+## 十七、仓库瘦身：安装器移出代码区 · 2026-10-03（夜）
+
+### 17.1 缘起
+
+v1.2.2 发布后，同一份安装器 `FATPACKII.bat`（1.19 MB）**同时挂在仓库 Code 区与 Release 资产上**：
+
+| 位置 | 状态 |
+|---|---|
+| `FforFeibafenqian`（v1.2.2）Release 资产 | ✅ 正常分发渠道（30 次下载计数从此走） |
+| `main` 分支 Code 区根目录 | ❌ 与 Release 重复，且让 clone 体积白白多背 1.2 MB |
+
+### 17.2 动作（提交 `3b33997`）
+
+| 步骤 | 命令 | 效果 |
+|---|---|---|
+| 摘除索引 | `git rm --cached FATPACKII.bat` | 退出仓库跟踪，**本地文件原样保留**（打包/重建仍可用） |
+| 防复发 | `.gitignore` 追加 `FATPACK*.bat` | 日后 `git add -A` 不会再把它带进来 |
+| 提交推送 | `chore(repo): 安装器 FATPACKII.bat 移出仓库（只随 Release 分发，Code 页不再重复）` | `6c4dd61..3b33997  main -> main` |
+
+### 17.3 验收
+
+| 项 | 结果 |
+|---|---|
+| 远端 Code 区 | `gh api repos/.../contents/FATPACKII.bat` → **404 Not Found** ✅ |
+| Release 资产 | `FATPACKII.bat` 仍在（1,219,014 B，sha256 `2e245bfb…`）✅ |
+| 跟踪文件数 | 44 → **42** |
+| 工作区 | `git status` 干净 |
+
+### 17.4 已知遗留
+
+> ⚠️ **本次只从最新提交移除，未重写历史。** 那 1.2 MB 的 blob 仍留在 git 历史里，
+> `git clone` 依旧会下载到它，**仓库体积并未减小**。真要瘦身需 `git filter-repo`
+> 重写历史 + **force push**（改写已发布历史，高风险，未做）。
+
+> 📌 **同类待议**：英文分支 `origin/ENforEnglishi` 上另有 `FATPACKEN.bat`（含 `make_fatpack_en.py`），
+> 若英文 Release 也已挂载该安装器，可照本节同样处理。
+
+---
+
 > 📌 本文件由 `README.md` 更新记录章节剥离并重编而成。
 > 📌 新增记录请**直接追加在本文件末尾（第十三节之后）**，或按日期新建小节；README 不再承载更新记录。
-> 📌 最近一次增订：**2026-10-03**（第十五、十六节）。
+> 📌 最近一次增订：**2026-10-03**（第十五、十六、十七节）。
