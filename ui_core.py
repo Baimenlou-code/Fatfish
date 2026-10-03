@@ -293,7 +293,7 @@ def render_inline(line):
 
 def print_banner():
     """打印启动横幅（青→粉渐变边框）。"""
-    title = "🐟 DeepSeek 联网肥鱼 H 版 v1.1.1 已启动 [DeepSeek Net Fish H Edition v1.1.1 Started]"
+    title = "🐟 DeepSeek 联网肥鱼 H 版 v1.2.1 已启动 [DeepSeek Net Fish H Edition v1.2.1 Started]"
     sub = "输入 /help 查看全部命令 [type /help for all commands]"
     w = max(len(title), len(sub)) + 6
     line = "─" * w

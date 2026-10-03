@@ -32,7 +32,7 @@ No programming knowledge needed — just follow along 👇
 | 🌊 **流式输出** | 回复边想边吐字，不再憋到最后刷一屏 / token-by-token streaming | 第二十一章 |
 | 🪟 **对话窗口（操作台）** | 黑底窗口里多行打字、拖文件与图片、报批点按钮 —— 窗口就是操作台 / the window IS the console | 第二十一章 |
 | 🎨 **状态台与输出路由** | 主界面只留对话与警告，过程信息交状态台与监控器 / the main screen stays clean | 第二十一章 |
-| 🧩 **主程序拆分 `fatfish_core/`** | 1856 行搬出主程序，十个部件独立成包 / ten parts moved out into a package | 第二十二章 |
+| 🧩 **主程序拆分 `fatfish_core/`** | 十个部件独立成包（拆分搬出 1856 行，现共 **2167 行**）/ ten parts moved out into a package | 第二十二章 |
 | ⏱️ **落款带上本轮耗时** | 回复末尾从死字符串 `本轮 ahbmc.ds` 改为真实的 `⏱️ 本轮 44.8s` / real round cost in the footer | 第二十一章 |
 | 🏠 **默认工作台 = 启动根目录** | 默认作业区不再是 `workspace/`，但作业约定仍是「尽量把产出写在 `workspace/` 里」/ default workspace root changed | 第二十二章 |
 | 🚀 **版本号 `v1.2.1`** | 48 处 / 6 个文件；启动器改名 `fatfish1.2.1.bat`（旧名留 3 行转发壳）/ version bump | 第二十二章 |
@@ -341,13 +341,13 @@ launch.py（启动枢纽：一个主进程 + 两个附属窗口）
 
 | 文件 / File | 大小 / Size | 行数 / Lines | 干啥的 / Purpose |
 |---|---|---|---|
-| `FATPACKII.bat` | 1184.7 KB | 341 | ★ **一键安装器**（内嵌 31 个最新文件，含 `fatfish_core/` 子包）/ one-click installer |
+| `FATPACKII.bat` | 1184.7 KB | 342 | ★ **一键安装器**（内嵌 31 个最新文件，含 `fatfish_core/` 子包）/ one-click installer |
 | `FATHFISH.py` | 170.8 KB | 3323 | **主程序**（聊天 REPL + 工具循环 + 计时 + 放行 + 流式挂钩 + 窗口胶水）/ main program |
 | `chat_window.py` | 96.8 KB | 2430 | ★ **对话窗口（操作台）**：黑底界面 + 输入桥 + 报批按钮 + 流式气泡（第 21 章）/ chat window |
 | `stream_core.py` | 53.2 KB | 1347 | ★ **流式内核**：增量渲染状态机 + 工具调用碎片拼装（第 21 章）/ streaming core |
 | `verify_tools.py` | 63.7 KB | 1448 | **双人核验**（第二位 AI 审查员）/ dual-AI verifier |
 | `ui_core.py` | 41.1 KB | 1036 | **展示层**（颜色 / 情绪调色 / `{{}}` 标记 / 横幅 / 等待动画 / 个性签名 / 左下角转圈）/ UI core |
-| `workspace.py` | 33.9 KB | 860 | **工作台**（路径安全、读过凭证、备份、14 个工具；**默认根 = 启动根目录**）/ workspace |
+| `workspace.py` | 33.9 KB | 860 | **工作台**（路径安全、读过凭证、备份、**19 个工具**含 5 个后台任务；**默认根 = 启动根目录**）/ workspace |
 | `exec_tools.py` | 32.0 KB | 904 | **跑命令 / 跑 Python**，输出落盘 / exec engine |
 | `boot_report.py` | 29.6 KB | 750 | **开工自检**（启动环境快照 + 注入提示词）/ boot report |
 | `make_fatpack.py` | 28.8 KB | 684 | ★ **安装器生成器**（文件更新后重跑它，见 8.4）/ installer builder |
@@ -362,11 +362,11 @@ launch.py（启动枢纽：一个主进程 + 两个附属窗口）
 | `common.py` | 4.8 KB | 147 | **公共基础件**（时间戳 / 日期分层目录，单一事实来源）/ shared utils |
 | `fatfish_lang.bat` | 3.9 KB | 89 | **语言探测器**（四级降级 → `FISH_LANG`）/ language probe |
 | `.env` | 2.2 KB | 65 | 你的密钥配置（🔴 **绝不要分享 / 上传**）/ your keys |
-| `README.md` | 142.5 KB | 2457 | 就是本文件（第 3.5 版 · 2026-10-02；会随文档更新变动）/ this file |
+| `README.md` | 145.0 KB | 2490 | 就是本文件（第 3.5 版 · 2026-10-02；会随文档更新变动）/ this file |
 | `fatfish1.1.1.bat` | 593 B | 12 | 旧名**转发壳**（3 行转发，老快捷方式仍可用）/ legacy forwarder |
 | `.gitignore` | 224 B | 15 | 防误传名单（`.env` / 日志 / 运行时产物）/ ignore list |
 
-> 📌 **`fatfish_core/`**（10 个模块 / 1856 行）是主程序拆出的功能包，相当于「多一个成员」，
+> 📌 **`fatfish_core/`**（10 个模块 / 现共 2167 行）是主程序拆出的功能包，相当于「多一个成员」，
 > 但它是个目录、不是文件 —— 详见**第二十二章**。
 > 📌 **安装器已重建**：`FATPACKII.bat` 于 2026-10-02 重新打包，内嵌清单由 17 项扩到 **31 项**
 > （补上 `chat_window.py` / `stream_core.py` / `fatfish_core/` 整个子包），
@@ -380,7 +380,7 @@ launch.py（启动枢纽：一个主进程 + 两个附属窗口）
 | 目录 / Dir | 干啥的 / Purpose | 会被 git 忽略吗 |
 |---|---|---|
 | `workspace/` | **作业区（建议产出放这儿）**：中间脚本 / 临时数据 / 实验产物 / the suggested sandbox | ✅ 忽略 |
-| `fatfish_core/` | ★ **功能包**：10 个模块 / 1856 行，2026-10-02 从主程序拆出（第 22 章）/ the split-out package | ❌ 不忽略 |
+| `fatfish_core/` | ★ **功能包**：10 个模块 / 现共 2167 行，2026-10-02 从主程序拆出（第 22 章）/ the split-out package | ❌ 不忽略 |
 | `logs/`（年 → 月 → 日） | **主程序**的聊天日志与执行输出 / chat & exec logs | ✅ 忽略 |
 | `generated_code/`（年 → 月 → 日） | 主程序自动存下的代码 / saved code | ✅ 忽略 |
 | `_backup/` | 根一级文件被改前的**自动备份**（按需自建）/ auto backups | ✅ 忽略 |
@@ -466,6 +466,8 @@ launch.py（启动枢纽：一个主进程 + 两个附属窗口）
 | `/help` | 显示帮助 / show help |
 | `exit` / `quit` / `退出` | 退出肥鱼 / quit |
 
+> 💡 **短别名**：`/st` = `/status`，`/vfy` = `/verify`，`/settings` = `/set`（都能用）。
+>
 > 路径里有空格，用双引号包起来：`/read "我的 文件夹/某个文件.py"`
 > Wrap paths with spaces in quotes.
 
@@ -867,6 +869,7 @@ python make_fatpack.py --manifest       # 只看会内嵌哪些文件，不生�
 | `SHOW_TIMER` | `True` | 是否显示轮次计时（`/timer on/off`） | 新增于 rev.2.1 |
 | `SHOW_WAIT_ANIM` | **`True`** | 等待时原地转圈 + 计时（四帧：短横 / 反斜杠 / 竖线 / 斜杠）| 新增于 2026-09-19 |
 | `WAIT_ANIM_INTERVAL` | `0.08` | 动画每帧间隔（秒）| 新增于 2026-09-19 |
+| `WAIT_ANIM_DELAY` | `0.4` | 等待动画**延迟多少秒才出现**（太快会闪、太慢又像卡死）| 2026-10-02 新增 |
 | `AUTO_APPROVE_ENABLED` | **`True`** | 「一键放行」总开关（报批时按 `a`/`1`）| 新增于 rev.2.3 |
 | `AUTO_APPROVE_DEFAULT` | `False` | 改成 `True` = 每轮默认已放行（完全不弹窗）| 新增于 rev.2.3 |
 | `AUTO_APPROVE_SCOPE` | **`all`** | 一键放行覆盖范围：`none` 全拦 / `writes` 仅写入 / **`all` 除敏感文件外全放行（含删除 / 执行）** | 2026-09-19 新增；同日默认由 `writes` 改为 `all` |
@@ -1059,7 +1062,11 @@ ws_run_cmd("dir")  /  ws_run_python(code)
 4. 重跑生成器（`--strict`），并在沙盒里做**解包往返验证**：
    31 项逐字节一致、目录结构正确、依赖可导入、能跑到主循环门口。
 
-**当前产物**：`FATPACKII.bat` 1,213,156 B / 341 行（II Edition · v1.2.1）。
+**当前产物**：`FATPACKII.bat` 1,213,156 B / 342 行（II Edition · v1.2.1）。
+
+> ⚠️ **安装器是「打包那一刻的快照」**：之后只要改过**任何一个被内嵌的文件**
+> （含本 `README.md`、`ui_core.py` 等 31 项之一），就必须重跑 `python make_fatpack.py` 才会同步；
+> 否则装出来的仍是旧内容（§8.3 的逐字节校验也会对不上）。
 
 ### 🟢 提醒 1：`.env` 是明文密钥
 
@@ -1959,6 +1966,7 @@ FATFISH_MODEL=moonshot-v1-8k
 | `VERIFIER_ANSWER_CTX` | 12000 | 答复复核时的上下文 |
 | `VERIFIER_MAX_TOKENS` | 2000 | 审查意见的输出上限 |
 | `VERIFIER_TIMEOUT` | 120 | 单次审查请求超时（秒） |
+| `VERIFIER_TEMPERATURE` | 0.2 | 审查员采样温度（越低越保守）|
 
 #### F. 人工报批
 
@@ -1974,7 +1982,23 @@ FATFISH_MODEL=moonshot-v1-8k
 | `TAVILY_MODE` | `auto` | `auto`=AI 决定 search/extract（推荐）/ `search`、`extract`=强制锁定 / `both`=先搜索再抓前 2 条正文 |
 | `VERIFIER_MAX_TOKENS` | 10000 | 审查意见输出上限（**此处为有效值**，覆盖 E 组同名默认） |
 
-#### ⚠️ H. 两条必读陷阱（`python-dotenv` 的坑）
+#### H. 界面 · 状态台 · 后台播报（进阶，多数人不用动）
+
+| 键 / Key | 默认值 | 说明 |
+|---|---|---|
+| `APPROVAL_SWEEP` | `1` | 报批内容在主界面「采完即扫」不留痕：`1`=扫掉（凭证只进状态台 / 监控器）/ `0`=留在屏幕上 |
+| `APPROVAL_RECEIPT` | `1` | 报批凭证另存一份 `logs/exec_approval_<PID>.out`：`1`=开 / `0`=关 |
+| `PHASE_MIRROR` | `1` | 阶段进度（送审 / 核验 / 模型输出）镜像到 `logs/exec_phase_<PID>.out`：`1`=开 / `0`=关 |
+| `STATUS_CONSOLE` | `1` | 是否起**状态台**窗口（`launch.py` 拉 `status_console.py`）：`1`=开 / `0`=关 |
+| `STATUS_CONSOLE_TTL` | `6.0` | 状态台心跳文件（`console.online`）多久没刷新就视为已退出（秒）|
+| `BG_NOTIFY` | `1` | 后台任务跑完时在主界面播报：`1`=开 / `0`=整条关掉 |
+| `BG_NOTIFY_SPEAK` | `1` | 播报时是否带提示音：`1`=开 / `0`=静音 |
+| `BG_NOTIFY_POLL` | `1.0` | 后台任务状态的轮询间隔（秒，下限 0.3）|
+| `WAIT_ANIM_DELAY` | `0.4` | 等待动画**延迟多少秒才出现**（秒）|
+
+> 📌 这些都有默认值、也都挂在 `/set` 里（`/set all` 可见），不改也能正常跑。
+
+#### ⚠️ I. 两条必读陷阱（`python-dotenv` 的坑）
 
 1. **留空的项，不要写行尾注释。**
    `python-dotenv` 不剥离 `KEY=   # 注释` 里的注释，会把整串当值；
@@ -2070,6 +2094,13 @@ QQ 群 ──► NapCat ──► qq_bridge（旁路进程） ──► 写 inbo
 /qq              看跟随模式状态
 /qq on           开（重启肥鱼后需重新开 —— 开关与产出记账都是内存态）
 /qq off          关
+/qq status       状态（含产出文件清单、密码窗口）
+/qq reset        重置产出文件清单 / 旁听缓冲
+/qq interject <条数> <分钟> <每小时上限>   旁听节奏（老式攒批用）
+/qq pass <每轮最多几条>                    直通时的合并上限
+/qq readpw on|off  非主人「纯只读」是否也要密码
+/qq media        看附件落地目录（图片 / 文件存哪儿了）
+/qq help         子命令一览
 ```
 
 `qq_bridge/config.json` 侧（改完**重启桥接**生效）：
@@ -2198,7 +2229,9 @@ QQ 直通仍是整段发送。
 | ③ | `roundtime.py` | 121 | **轮次计时**：`_fmt_secs` / `_mark_round_start` / `_mark_round_end` / `cost_tag`（三处落款共用，详见 21.4） |
 | ② | `__init__.py` | 11 | 包说明 |
 
-合计 **1856 行**搬出主程序（第一批 + 第二批 1828 行 + 第三批计时器 28 行）：
+上表逐模块行数**合计 2167 行**（10 个模块 + 包说明 `__init__.py`）。
+拆分当时搬出的是 **1856 行**（第一批 + 第二批 1828 行 + 第三批计时器 28 行），
+此后各模块自身还在继续增长 —— 所以「现共」与「搬出」是两个数，别混：
 
 ```
 FATHFISH.py   4848 行 / 242.4 KB  ──拆分──►  3303 行 / 169.6 KB   （-31.9%）
@@ -2298,7 +2331,7 @@ FatFish/
 ├── stream_core.py           ← 流式内核（增量渲染 + 工具调用碎片拼装）
 ├── status_console.py        ← 状态台（过程信息 / 工具日志 / 报批凭证）
 ├── fatfish_watcher.py       ← 监控器（只滚启动后的新增输出）
-├── workspace.py             ← 工作台沙盒 / 14 个工具 / 敏感文件守护
+├── workspace.py             ← 工作台（19 个工具 / 敏感文件守护）
 ├── file_tools.py            ← 文件·目录·图片读取（魔数嗅探真伪）
 ├── net_tools.py             ← Tavily 联网（search / extract）
 ├── exec_tools.py            ← 跑命令 / 跑 Python，输出落盘供监控器 tail
@@ -2317,7 +2350,7 @@ FatFish/
 ├── .gitignore               ← 防误传名单
 ├── _fatfish_pid.txt         ← runtime 窗口 PID（运行时生成；启动时重写、退出即删）
 │
-├── fatfish_core/            ← 🧩 主程序拆出的功能包（10 模块 / 1856 行）
+├── fatfish_core/            ← 🧩 主程序拆出的功能包（10 模块 / 2167 行）
 │   ├── qqmode.py            ←   QQ 前置模式（973 行）
 │   ├── roundtime.py         ←   轮次计时（121 行）
 │   ├── uicolors.py          ←   颜色单一真源（218 行）
