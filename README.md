@@ -281,8 +281,6 @@ API Key 就像你家的**银行卡密码**。一旦被坏人拿到，他就能�
 
 ---
 
----
-
 ## 六、工作台：它能动哪些文件
 
 - **工作台 = 肥鱼能自由读写的那个文件夹**，默认是**程序所在的根目录**（`FATHFISH.py` / `.bat` 那个文件夹）。
@@ -331,28 +329,26 @@ FATFISH_MODEL=deepseek-flash
 
 ## 八、出问题了怎么办（急救包）
 
-|| 现象 / Symptom | 原因 & 解决|
-||---|---|
-|| **双击 bat 一闪就没了** | 没装 Python 或没加 PATH。重装 Python 并勾 `Add Python to PATH`|
-|| **提示 `python 不是内部或外部命令`** | Python 没加进 PATH，重装时勾选那个选项|
-|| **提示「提取内嵌数据失败，安装器可能已损坏」** | 安装器的 `##PYBEGIN##` 标记或载荷被破坏（比如用编辑器保存过、被截断）。重新拿一份完整的安装器，或本地重跑 `python make_fatpack.py`|
-|| **`start cmd /k fatfish_runtime.bat` 报找不到文件** | 安装器没内嵌 runtime。从完整目录把 `fatfish_runtime.bat` / `fatfish_lang.bat` / `launch.py` / `fatfish_watcher.py` 补过来，或重新跑一遍安装器 |
-|| **能启动但一聊天就报错** | `.env` 里 `FATFISH_API_KEY` 没填对（旧名 `DEEPSEEK_API_KEY` 同样可用），检查有没有多余空格|
-|| **报「模型不存在」** | 改 `.env` 里的 `FATFISH_MODEL`（模型名以官方文档 / `/models` 为准），改完 `/reload` |
-|| **说不能联网** | 没填 `TAVILY_API_KEY`，或 key 过期（401）/ missing or expired Tower key |
-|| **提示「未读过该文件，请先 ws_read」** | 这是安全设计，不是 bug。让它先 `ws_read`（它会弹批准框，你按 `y`）|
-|| **提示「文件已被外部改动，凭证失效」** | 你（或别的程序）改了这个文件，凭证自动作废，重新读一次即可 |
-|| **提示「路径越界」** | 你让它读写工作台以外的路径。用 `/ws cd` 切到那个目录（移出默认作业区需批准）|
-|| **读写操作弹 `y/N` 提示** | 正常流程。输入 `y` 放行，`n` 拒绝（拒绝后它不会重试）/ press `y` or `n` |
-|| **监控器窗口一直没动静** | 只有当你让它跑命令/跑 Python 时才会有输出滚动（它是「子程序输出镜子」，不是日志窗）/ it only shows sub-program output |
-|| **关掉主窗口，监控器还在倒计时** | 设计如此：最多再 drain 3 秒 + 30 秒倒计时，按任意键可立刻退|
-|| **提示「工具调用轮次达到上限，已强制停止」** | 单轮超过 512 次工具调用，属于失控保护|
-|| **提示「回复被 max_tokens 截断」** | 回复太长被截。让它拆成几段继续，或调大 `MAX_REPLY_TOKENS` |
-|| **依赖安装失败** | 安装器会自动改清华镜像重试；还不行手跑：`python -m pip install openai python-dotenv requests` |
-|| **窗口中文乱码** | bat 里已设 `chcp 65001`；若仍乱码，换个新一点的 Windows 终端 |
-|| **改了 `.env` 不想重启** | 输入 `/reload` |
-
----
+| 现象 | 原因 & 解决 |
+|---|---|
+| **双击 bat 一闪就没了** | 没装 Python，或装时没勾 PATH。重装 Python 并勾上 `Add Python to PATH` |
+| **提示 `python 不是内部或外部命令`** | 同上：Python 没进 PATH |
+| **提示「提取内嵌数据失败，安装器可能已损坏」** | 安装器的 `##PYBEGIN##` 标记或载荷被破坏了（被编辑器保存过、被截断）。重新拿一份完整安装器，或本地重跑 `python make_fatpack.py` |
+| **`start cmd /k fatfish_runtime.bat` 报找不到文件** | 安装器没内嵌启动链文件。从完整目录补齐 `fatfish_runtime.bat` / `fatfish_lang.bat` / `launch.py` / `fatfish_watcher.py`，或重跑一遍安装器 |
+| **能启动，但一聊天就报错** | `.env` 里的 `FATFISH_API_KEY` 没填对（旧名 `DEEPSEEK_API_KEY` 同样可用），检查有没有多余空格 |
+| **报「模型不存在」** | 改 `.env` 的 `FATFISH_MODEL`（模型名以官方文档 / `/models` 接口为准），改完 `/reload` |
+| **说不能联网** | 没填 `TAVILY_API_KEY`，或 key 过期（401） |
+| **提示「未读过该文件，请先 ws_read」** | 安全设计，不是 bug。让它先读（会弹批准框，你按 `y`） |
+| **提示「文件已被外部改动，凭证失效」** | 你（或别的程序）改过这个文件，凭证自动作废，重新读一次即可 |
+| **提示「路径越界」** | 你让它读写工作台以外的路径。用 `/ws cd` 切到那个目录（移出默认作业区需批准） |
+| **读写操作弹 `y/N` 提示** | 正常流程。输入 `y` 放行、`n` 拒绝（拒绝后它不会重试） |
+| **监控器窗口一直没动静** | 它只显示「子程序输出」。不让它跑命令 / 跑代码，就不会有内容 |
+| **关掉主窗口后，监控器还在倒计时** | 设计如此：最多再 drain 3 秒 + 30 秒倒计时，按任意键可立刻退 |
+| **提示「工具调用轮次达到上限」** | 单轮超过 512 次工具调用，属失控保护。把需求拆开重说一遍即可 |
+| **提示「回复被 max_tokens 截断」** | 回复太长被截。让它拆成几段继续，或调大 `MAX_REPLY_TOKENS` |
+| **依赖安装失败** | 安装器会自动换清华镜像重试；还不行手动跑：`python -m pip install openai python-dotenv requests` |
+| **窗口中文乱码** | bat 里已设 `chcp 65001`；若仍乱码，换一个较新的 Windows 终端 |
+| **改了 `.env` 不想重启** | 输入 `/reload` |
 
 ---
 
@@ -429,8 +425,6 @@ FATFISH_MODEL=deepseek-flash
 
 **就这几步，猪都会了。祝你玩得开心！** 🎉
 **That's it — even a pig can do it. Have fun!** 🎉
-
----
 
 ---
 
