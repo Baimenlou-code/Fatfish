@@ -112,6 +112,25 @@ from ui_core import (   # noqa: F401
 # ============ 输出渲染 ============
 
 
+# ============ [P0-A] 崩溃留痕（faulthandler）============
+#   2026-10-03 事故：主程序被 abort() 原生打死（0xC0000409），stderr 一闪而过，
+#   Python 层的栈完全没留下 —— 最后只能靠 Windows 转储 + 反汇编 _tkinter.pyd，
+#   才定位到 Tcl 那句 "Calling Tcl from different apartment"。
+#   挂上 faulthandler 后，任何致命错误都会把**全线程 Python 栈**写进这个文件。
+try:
+    import faulthandler as _fh
+    _FH_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            ".fatfish_tmp", "crash_fd.log")
+    try:
+        os.makedirs(os.path.dirname(_FH_PATH), exist_ok=True)
+    except OSError:
+        pass
+    _FH_FP = open(_FH_PATH, "a", encoding="utf-8", errors="replace")
+    _fh.enable(file=_FH_FP, all_threads=True)
+except Exception:
+    pass
+
+
 def print_startup_status():
     """打印运行状态一览（启动时收敛为一行提示，完整内容用 /status 调出）。"""
     print(paint(f"  🧠 主模型 [main model]：{MODEL} @ {BASE_URL}", BC))
@@ -380,6 +399,62 @@ def _bg_notifier_loop():
             pass
 
 
+def _win_gui_mode():
+    """当前是不是「GUI 轮询驱动」模式（对话窗口当主界面）。
+
+    判据与控制台的那套**完全分开**：控制台模式靠 console_cursor /
+    console_is_idle / console_send_enter；GUI 模式没有控制台提示符可看，
+    改为问主界面：输入框空着吗？然后直接唤醒主循环。
+    """
+    try:
+        return (_CW is not None) and bool(_WIN_QUEUE_MODE[0])
+    except Exception:
+        return False
+
+
+def _bg_try_interject_gui():
+    """GUI 版插话：输入框空着 → 播报 + 唤醒主循环；正在打字 → 一个字都不碰。
+
+    ★ 为什么不能沿用控制台那套：
+        `ui_core.console_is_idle(*_BG_PROMPT_POS)` 读的是**控制台光标/缓冲**，
+        GUI-first 下控制台只是排障备份，可能根本没人看。必须改问主界面。
+
+    ★ 为什么不直接注入回车：
+        控制台用 `console_send_enter()` 往 stdin 塞一个换行；GUI 模式改用
+        `_CW.nudge()` —— 往 OUT_Q 塞一条「空消息」，语义完全等价
+        （chat_window 的 wait_input / drain_pending 本就定义了 `"" = 回车`），
+        主循环收到空输入就会走 `_bg_build_speak_input()` 那条路。
+
+    ★ 线程安全：本函数在守护线程里跑。`input_empty()` 只读一个整数快照，
+       不碰任何 Tk 控件（跨线程碰 widget 正是 P0 修掉的 0xC0000409 成因）。
+    """
+    if not BG_NOTIFY or not _BG_AT_PROMPT:
+        return False
+    with _BG_NOTICE_LOCK:
+        pend = [n for n in _BG_NOTICES if not n["shown"]]
+    if not pend:
+        return False
+    try:
+        if not _CW.input_empty():
+            return False                  # ★ 你正在打字 → 一个字都不碰
+    except Exception:
+        return False                      # 问不到 → 宁可少播报一次
+    for n in pend:
+        try:
+            print(_fmt_job_notice(n["job"]))   # 走 _WinMirror → 「📜 日志」面板
+            n["shown"] = True
+        except Exception:
+            pass
+    if BG_NOTIFY_SPEAK:
+        try:
+            time.sleep(0.05)              # 与控制台版对齐：再确认一次
+            if _CW.input_empty():
+                _CW.nudge()               # 等价于你按了一次回车 → 主循环醒来
+        except Exception:
+            pass
+    return True
+
+
 def _bg_try_interject():
     """用户空着提示符时，立刻把待播报结果打出来。返回是否播报成功。"""
     # ★ 2026-09-24 修：本函数第 448 行给 _BG_PROMPT_POS 赋值，但函数体里没有
@@ -387,6 +462,10 @@ def _bg_try_interject():
     #   于是第 441 行的「读」抛 UnboundLocalError，被外层 except 静默吞掉，
     #   「后台任务跑完立刻播报并唤醒输入框」这条路一直没生效过。
     global _BG_PROMPT_POS
+    # ★ [P1c] GUI-first：窗口才是提示符。控制台那套（光标 / 注入回车）不适用，
+    #   先分流到 GUI 版；不是 GUI 模式才走原来的控制台逻辑。
+    if _win_gui_mode():
+        return _bg_try_interject_gui()
     if not BG_NOTIFY or not _BG_AT_PROMPT:
         return False
     with _BG_NOTICE_LOCK:
@@ -1003,6 +1082,14 @@ def _status_mirror(text, keep_in_main=False):
         keep_in_main = True
     if keep_in_main or not _console_online():
         print(body)
+    # ★ [P1c] 同时送 GUI「🧿 状态」面板。
+    #   与状态台窗口**双路并行**，互不影响：status.log 给状态台窗口，
+    #   push_status 给 GUI（编辑器组布局的「状态」面板）。
+    #   失败一律静默 —— 过程信息绝不能因为界面而中断主流程。
+    try:
+        _CW.push_status(body)
+    except Exception:
+        pass
 
 
 # ============ 输出路由：主界面只留「对话 + 警告」（2026-10-02）============
@@ -1386,6 +1473,17 @@ _WIN_LAST_STREAM = [0.0]           # 最近一次流式结束时间（防同一�
 _WIN_AUTO = (os.environ.get("FATFISH_WINDOW", "1").strip().lower()
              not in ("0", "off", "false", "no", "关", "关闭"))
 
+# ============ [P0-B] GUI-First 开关 ============
+#   _TK_MAIN=1（默认）：Tk 归**主线程**，agent 主循环搬去子线程。
+#                        这是修 0xC0000409 / Tcl_AsyncDelete 的根治手段。
+#   FATFISH_TK_MAIN=0  ：一键退回旧模型（Tk 在 daemon 子线程），用于排障对比。
+_TK_MAIN = (os.environ.get("FATFISH_TK_MAIN", "1").strip().lower()
+            not in ("0", "off", "false", "no", "关", "关闭"))
+# 主线程是否已接管窗口的归属权（GUI-first 下不许再起子线程窗口）
+_TK_MAIN_OWNS_WINDOW = [False]
+# GUI-first 下「窗口关闭」= 程序该退出了；用它让 _win_input 抛 EOFError
+_AGENT_EXIT_ON_WIN_CLOSE = [False]
+
 
 # ---------------------------------------------------------------- 基础
 def _win_ok():
@@ -1495,6 +1593,13 @@ def _win_input(qq_input):
     if _CW is None or not _WIN_QUEUE_MODE[0]:
         return qq_input("")
     while True:
+        # ★ [P0-B] GUI-first：窗口是唯一入口，它一关就没人能再喂输入了。
+        #   必须**放在循环内部**检查 —— 只在进函数时查一次是不够的：
+        #   agent 一旦进入这个 while 就会一直空转，永远发现不了窗口已关，
+        #   进程于是挂死（实测：关窗后窗口消失，进程却还在，只能强杀）。
+        #   抛 EOFError 交给主循环里既有的 `except EOFError: break` 收尾。
+        if _AGENT_EXIT_ON_WIN_CLOSE[0] and not _CW.is_on():
+            raise EOFError("[P0-B] 对话窗口已关闭，主循环退出")
         try:
             pend = _CW.drain_pending()
         except Exception:
@@ -1566,13 +1671,21 @@ class _WinMirror(object):
     """stdout 镜像层：原样透传 + 攒一小批再推给窗口「日志」页。
 
     为什么要攒：主程序每轮会打几百个小碎片（print(end="")、色码…），
-    逐个入队会把 Tk 的轮询节奏淹掉。攒 ~0.1s 一批，观感没差别，开销小一个量级。
+    逐个入队会把 Tk 的轮询节奏淹掉。攒一批再推，观感更顺、开销小一个量级。
+
+    ★ [P0-A] 2026-10-03 刷新率优化：
+      旧实现是固定 `sleep(0.10)` 攒批 —— 每批最多要等 100ms 才上屏，
+      叠加窗口侧 60ms 轮询，端到端平均延迟约 80ms、最坏 160ms，
+      肉眼就是「比看 bat 还卡」。
+      现在改成 **Event 驱动**：有输出立刻唤醒推送线程（延迟 < 1ms），
+      只在空闲时用 50ms 兜底轮询。CPU 反而更省（不再空转 sleep）。
     """
 
     def __init__(self, real):
         self._real = real
         self._buf = []
         self._lock = threading.Lock()
+        self._evt = threading.Event()
         try:
             t = threading.Thread(target=self._loop, daemon=True,
                                  name="fatfish-win-mirror")
@@ -1591,6 +1704,7 @@ class _WinMirror(object):
                     self._buf.append(s)
                     if len(self._buf) > 2000:
                         del self._buf[:1000]
+                self._evt.set()          # ★ [P0-A] 有数据 → 立刻唤醒推送线程
             except Exception:
                 pass
         return len(s)
@@ -1603,7 +1717,9 @@ class _WinMirror(object):
 
     def _loop(self):
         while True:
-            time.sleep(0.10)
+            # 有数据时立即醒；没数据时最多等 50ms 再兜一圈（省 CPU）
+            self._evt.wait(0.05)
+            self._evt.clear()
             try:
                 with self._lock:
                     if not self._buf:
@@ -1619,9 +1735,45 @@ class _WinMirror(object):
 
 
 # ---------------------------------------------------------------- 起窗 / 停窗
+def _win_wire_output(quiet=False):
+    """[P0-B] 起窗之后的公共接线：stdout 镜像 + 操作台模式 + 提示。
+
+    抽出来是因为现在有**两条**起窗路径：
+      · 旧模型：_win_start() → chat_window.start()（子线程建窗）
+      · 新模型：_run_gui_first() → chat_window.start_main_thread()（主线程建窗）
+    两条路径的「接线」必须一模一样，否则会出现「窗口起来了但日志页不刷新」
+    这类只在某一条路径上出现的问题。
+    """
+    global _WIN_MIRROR
+    # ---- 输出镜像（stdout → 窗口日志页）----
+    if _WIN_MIRROR is None:
+        try:
+            _WIN_MIRROR = _WinMirror(sys.stdout)
+            sys.stdout = _WIN_MIRROR
+        except Exception:
+            _WIN_MIRROR = None
+
+    # ---- 进入操作台模式 ----
+    #   只是打个旗标：主循环下一轮起改用「轮询 OUT_Q + 探测控制台按键」取词。
+    #   这里**不开线程** —— 原因见 _win_console_has_key 的说明。
+    _WIN_QUEUE_MODE[0] = True
+
+    if not quiet:
+        print(paint("  🪟 对话窗口已开启 [chat window on] —— 操作台模式", BC, BOLD))
+        print(paint("     · 窗口里：Enter 发送 / Shift+Enter 换行 / 拖文件即附件", BC, DIM))
+        print(paint("     · 报批会在窗口里弹出按钮，点一下就行", BC, DIM))
+        print(paint("     · 我的回复在窗口气泡里逐字出现（流式）", BC, DIM))
+        print(paint("     · 控制台**照旧能用**（两边都能打字，先到的先算）", BC, DIM))
+    return True
+
+
 def _win_start(quiet=False):
     """起窗口 + 进入操作台模式（幂等）。返回是否成功。"""
     global _WIN_MIRROR
+    # ★ [P0-B] GUI-first：窗口归主线程所有，这里**绝不能再起**子线程窗口，
+    #   否则同一个进程里会有两个 Tk 解释器 —— 那正是崩溃的温床。
+    if _TK_MAIN and _TK_MAIN_OWNS_WINDOW[0]:
+        return _win_wire_output(quiet)
     if _CW is None:
         if not quiet:
             print(paint("  ⚠️  找不到 chat_window.py，对话窗口不可用（控制台照常）。",
@@ -1643,26 +1795,8 @@ def _win_start(quiet=False):
     else:
         w = True
 
-    # ---- 输出镜像（stdout → 窗口日志页）----
-    if _WIN_MIRROR is None:
-        try:
-            _WIN_MIRROR = _WinMirror(sys.stdout)
-            sys.stdout = _WIN_MIRROR
-        except Exception:
-            _WIN_MIRROR = None
-
-    # ---- 进入操作台模式 ----
-    #   只是打个旗标：主循环下一轮起改用「轮询 OUT_Q + 探测控制台按键」取词。
-    #   这里**不开线程** —— 原因见 _win_console_has_key 的说明。
-    _WIN_QUEUE_MODE[0] = True
-
-    if not quiet:
-        print(paint("  🪟 对话窗口已开启 [chat window on] —— 操作台模式", BC, BOLD))
-        print(paint("     · 窗口里：Enter 发送 / Shift+Enter 换行 / 拖文件即附件", BC, DIM))
-        print(paint("     · 报批会在窗口里弹出按钮，点一下就行", BC, DIM))
-        print(paint("     · 我的回复在窗口气泡里逐字出现（流式）", BC, DIM))
-        print(paint("     · 控制台**照旧能用**（两边都能打字，先到的先算）", BC, DIM))
-    return True
+    # [P0-B] 公共接线（与 GUI-first 路径共用同一份实现）
+    return _win_wire_output(quiet)
 
 
 def _win_stop():
@@ -1726,7 +1860,10 @@ def _win_handle_cmd(user_input):
 # 开机自动起窗 + 进入操作台模式（FATFISH_WINDOW=0 可关）
 if _WIN_AUTO:
     try:
-        _win_start(quiet=True)
+        # ★ [P0-B] GUI-first 模式下，窗口由**主线程**在文件末尾（_run_gui_first）
+        #   统一创建；这里若也起一次，就会在子线程再建一个 Tk —— 绝对不行。
+        if not _TK_MAIN:
+            _win_start(quiet=True)
     except Exception:
         pass
 # [/WINDOW-PATCH v1]
@@ -2409,912 +2546,996 @@ from fatfish_core.roundtime import (
 _rt_bind(paint=paint, log=log, _ts=_ts, BK=BK, DIM=DIM,
          show_timer=(lambda: SHOW_TIMER), exiting=(lambda: _TIMER_EXITING))
 
-while True:
-    try:
-        # 打新提示符之前补播积压通知：此刻必然没有输入行，绝对安全
-        _bg_flush_pending_notices()
-        make_prompt()
-        _BG_PROMPT_POS = ui_core.console_cursor() or (None, None)
-        _sync_qqmode_pos()   # [SPLIT v2]
-        _BG_AT_PROMPT = True
-        user_input = _win_input(_qq_input).strip()  # [WINDOW-PATCH v1]
-        _BG_AT_PROMPT = False
-        _syn_turn = False
-        if not user_input:
-            # 空回车：若有后台任务刚跑完，就借这一回合让肥鱼主动开口
-            _syn_msg = _bg_build_speak_input()
-            if not _syn_msg:
+# ============================================================
+# [P0-B] agent 主循环（搬进函数 → 主线程可以专职跑 Tk）
+# ============================================================
+def _agent_main():
+    """agent 主循环。运行在**子线程**里；主线程专职跑 Tk mainloop。
+
+    ★ 为什么必须搬进函数：Tkinter 要求 Tk 在主线程，而模块级的
+      `while True:` 会一直占着主线程不放。搬进来之后，主线程才能
+      让给 `mainloop()` —— 这是 0xC0000409 / Tcl_AsyncDelete 的根治手段。
+
+    ★ 下面这些 global **一个都不能少**：这些名字原本是模块级变量，
+      在循环体里被赋值。搬进函数后若不声明 global，Python 会把它们
+      变成本函数的**局部变量** —— 模块级那份永远不更新，表现为
+      「改了配置不生效」「退出标志失灵」这类**静默**错误。
+      清单由 AST 分析自动生成，勿手改。
+    """
+    global API_KEY, BASE_URL, MODEL, TAVILY_API_KEY
+    global VERIFY_FINAL_ANSWER, VERIFY_MIRROR, VERIFY_MIRROR_PATH, _AUTO_APPROVE_TURN
+    global _BG_AT_PROMPT, _BG_PROMPT_POS, _SYS_CONTENT, _TIMER_EXITING
+    global _err_streak, _last_err_sig, _quit_clean, _verify_retry
+    global _verify_suppl, client, messages
+
+    while True:
+        try:
+            # 打新提示符之前补播积压通知：此刻必然没有输入行，绝对安全
+            _bg_flush_pending_notices()
+            make_prompt()
+            _BG_PROMPT_POS = ui_core.console_cursor() or (None, None)
+            _sync_qqmode_pos()   # [SPLIT v2]
+            _BG_AT_PROMPT = True
+            user_input = _win_input(_qq_input).strip()  # [WINDOW-PATCH v1]
+            _BG_AT_PROMPT = False
+            _syn_turn = False
+            if not user_input:
+                # 空回车：若有后台任务刚跑完，就借这一回合让肥鱼主动开口
+                _syn_msg = _bg_build_speak_input()
+                if not _syn_msg:
+                    continue
+                _syn_turn = True
+                user_input = _syn_msg
+                print(paint("  🔔 后台任务已完成，肥鱼主动开口 [proactive report]",
+                            BC, BOLD))
+            _record_user_event("系统·后台任务播报" if _syn_turn else "用户命令",
+                               "（后台任务完成通知）" if _syn_turn else user_input)
+
+            # ---- 计时：先结算"你停留了多久"，再开始本轮计时 ----
+            _mark_round_start()
+
+            # ---- 读写报批：复位"一键放行"（作用域 = 本轮，你一发新命令就失效）----
+            # 斜杠命令不算"干活"，静默复位即可，免得刷屏。
+            _reset_auto_approve(quiet=user_input.startswith("/"))
+
+            # ---- 命令可见化：斜杠命令进入输出捕获（供执行者 AI 感知）----
+            _cmd_begin(user_input)
+
+            # ---- 退出 ----
+            if user_input.lower() in ("exit", "quit", "退出"):
+                _TIMER_EXITING = True          # 退出时不打印"本轮耗时"，保持告别语干净
+                _quit_clean = True            # [QUIT-CLEAN v1] 主动退出
+                print(rainbow("  ✨ 再见！期待下次相遇 [Bye! See you next time] ✨  "))
+                _sig = ui_core.signature()
+                if _sig:
+                    print(ui_core.paint("  ✎ " + _sig, ui_core.BK, ui_core.ITAL))
+                log(f"[{_ts()}] === 会话正常结束 ===")
+                break
+
+            # ---- /help ----
+            if user_input == "/help":
+                print(paint(HELP_TEXT, BY))
                 continue
-            _syn_turn = True
-            user_input = _syn_msg
-            print(paint("  🔔 后台任务已完成，肥鱼主动开口 [proactive report]",
-                        BC, BOLD))
-        _record_user_event("系统·后台任务播报" if _syn_turn else "用户命令",
-                           "（后台任务完成通知）" if _syn_turn else user_input)
 
-        # ---- 计时：先结算"你停留了多久"，再开始本轮计时 ----
-        _mark_round_start()
+            # ---- /status 运行状态一览 ----
+            if user_input in ("/status", "/st"):
+                print(paint("  📋 运行状态 [runtime status]", BC, BOLD))
+                print_startup_status()
+                print(paint("  （各项均可单独调整：/set 查看与修改参数）", BC, DIM))
+                continue
 
-        # ---- 读写报批：复位"一键放行"（作用域 = 本轮，你一发新命令就失效）----
-        # 斜杠命令不算"干活"，静默复位即可，免得刷屏。
-        _reset_auto_approve(quiet=user_input.startswith("/"))
+            # ---- /set 统一设置中心 ----
+            if user_input == "/set" or user_input.startswith("/set ") or user_input == "/settings":
+                body = "" if user_input == "/settings" else user_input[4:].strip()
+                parts = body.split(None, 1)
+                sub = parts[0].lower() if parts else ""
+                arg = parts[1].strip() if len(parts) > 1 else ""
 
-        # ---- 命令可见化：斜杠命令进入输出捕获（供执行者 AI 感知）----
-        _cmd_begin(user_input)
+                # /set                     → 列表
+                if sub == "":
+                    print(paint(settings.render(show_all=False), BC))
+                # /set all                 → 含进阶项
+                elif sub == "all":
+                    print(paint(settings.render(show_all=True), BC))
+                # /set diff                → 只看偏离项
+                elif sub in ("diff", "改过"):
+                    print(paint(settings.render_diff(), BY))
+                # /set profile [名] [--reset] [--show]  → 预设方案
+                elif sub in ("profile", "profiles", "方案", "预设"):
+                    a = arg.lower()
+                    if a in ("", "list", "ls"):
+                        print(paint(settings.render_profiles(), BC))
+                    else:
+                        tokens = arg.split()
+                        name = tokens[0]
+                        do_reset = "--reset" in tokens
+                        do_show = "--show" in tokens or "--preview" in tokens
+                        if do_show:
+                            print(paint(settings.profile_preview(name), BC))
+                        else:
+                            ok, msg, applied, failed = settings.apply_profile(
+                                name, reset_first=do_reset)
+                            print(paint(("  " if ok else "  ⚠️  ") + msg,
+                                        BG if ok else BR, BOLD))
+                            if applied:
+                                for k, old, new in applied:
+                                    rec = settings.record(k)
+                                    print(paint(f"       · {k:<26} {rec.fmt(old):<14} → {rec.fmt(new)}",
+                                                BC, DIM))
+                            if ok:
+                                print(paint("     （仅本次运行生效；要持久化用 /set save）", BC, DIM))
+                # /set save                → 写入 .env
+                elif sub == "save":
+                    ok, msg = settings.save_to_env()
+                    print(paint("  💾 " + msg, BG if ok else BR, BOLD))
+                # /set reset [key]         → 还原
+                elif sub in ("reset", "default", "恢复"):
+                    ok, msg, changed = settings.reset(arg or None)
+                    print(paint(("  ♻️  " if ok else "  ⚠️  ") + msg, BG if ok else BR, BOLD))
+                    if changed:
+                        print(paint("     （仅本次运行生效；想持久化请 /set save，"
+                                    "或把 .env 里对应的行删掉）", BC, DIM))
+                else:
+                    # /set <key>            → 查看单项
+                    # /set <key> <value>    → 设置
+                    key = sub
+                    if arg == "":
+                        if settings.has(key):
+                            print(paint(settings.render(key), BC))
+                        else:
+                            print(paint(f"  ⚠️ 未知设置项：{key}（用 /set 查看全部）", BR, BOLD))
+                    else:
+                        ok, msg = settings.set(key, arg)
+                        color = BG if ok else BR
+                        print(paint(("  ✅ " if ok else "  ⚠️  ") + msg, color, BOLD))
+                        if ok:
+                            print(paint("     （仅本次运行生效；要持久化用 /set save）", BC, DIM))
+                log(f"[{_ts()}] /set {body}")
+                continue
 
-        # ---- 退出 ----
-        if user_input.lower() in ("exit", "quit", "退出"):
-            _TIMER_EXITING = True          # 退出时不打印"本轮耗时"，保持告别语干净
-            _quit_clean = True            # [QUIT-CLEAN v1] 主动退出
-            print(rainbow("  ✨ 再见！期待下次相遇 [Bye! See you next time] ✨  "))
+            # ---- /timer 计时显示开关 ----
+            # ---- [QQMODE-INPROC v1] /qq 跟随模式 ----
+            if _qq_handle_cmd(user_input):
+                continue
+
+            # ---- [STREAM-PATCH v1] /stream 流式开关 ----
+            if _fc_handle_cmd(user_input):
+                continue
+
+            # ---- [WINDOW-PATCH v1] /window 对话窗口 ----
+            if _win_handle_cmd(user_input):
+                continue
+
+            if user_input.startswith("/timer"):
+                arg = user_input[6:].strip().lower()
+                if arg in ("on", "off"):
+                    settings.set("show_timer", arg == "on")
+                    print(paint(f"  ⏱️ 计时 {'ON' if SHOW_TIMER else 'OFF'}",
+                                BG if SHOW_TIMER else BR, BOLD))
+                    log(f"[{_ts()}] 计时显示切换为 {SHOW_TIMER}")
+                elif arg == "":
+                    extra = (f" ｜ 距上轮 {_fmt_secs(time.time() - last_round_end())}"
+                             if last_round_end() is not None else "")
+                    print(paint(f"  ⏱️ 计时 {'ON' if SHOW_TIMER else 'OFF'}{extra}", BC, BOLD))
+                    print(paint("     /timer on | /timer off", BC))
+                else:
+                    print(paint(f"  ⚠️ 未知参数：{arg}（可选 on / off）", BR, BOLD))
+                continue
+
+            # ---- /auto 一键放行管理 ----
+            if user_input.startswith("/auto"):
+                arg = user_input[5:].strip().lower()
+                if arg in ("on", "off"):
+                    settings.set("auto_approve_enabled", arg == "on")
+                    if not AUTO_APPROVE_ENABLED:
+                        _AUTO_APPROVE_TURN = False      # 关掉时立刻收回本轮放行
+                    print(paint(f"  🔐 一键放行 {'ON' if AUTO_APPROVE_ENABLED else 'OFF'}",
+                                BG if AUTO_APPROVE_ENABLED else BR, BOLD))
+                    log(f"[{_ts()}] 一键放行切换为 {AUTO_APPROVE_ENABLED}")
+                elif arg in ("now", "go"):
+                    _AUTO_APPROVE_TURN = True
+                    print(paint("  🔓 本轮已放行：后续读写操作不再询问"
+                                "（你发下一条命令后自动恢复报批）", BG, BOLD))
+                    log(f"[{_ts()}] 用户手动放行本轮")
+                elif arg == "":
+                    print(paint(
+                        f"  🔐 一键放行：{'ON' if AUTO_APPROVE_ENABLED else 'OFF'}"
+                        f" ｜ 本轮：{'已放行' if _AUTO_APPROVE_TURN else '未放行'}"
+                        f" ｜ 每轮默认：{'已放行' if AUTO_APPROVE_DEFAULT else '需报批'}", BC, BOLD))
+                    print(paint("     /auto on | /auto off 开关功能 ｜ /auto now 立刻放行本轮", BC))
+                else:
+                    print(paint(f"  ⚠️ 未知参数：{arg}（可选 on / off / now）", BR, BOLD))
+                continue
+
+            # ---- /model 主模型查看 / 临时切换 ----
+            if user_input == "/model" or user_input.startswith("/model "):
+                arg = user_input[6:].strip()
+                if not arg:
+                    masked = ("（未配置）" if not API_KEY else
+                              (API_KEY[:6] + "…" + API_KEY[-4:]) if len(API_KEY) > 12 else "已配置")
+                    print(paint("  🧠 主模型 [main model] 状态：", BC, BOLD))
+                    print(paint(f"     · 模型 [model]    ：{MODEL}", BC))
+                    print(paint(f"     · 接口 [base_url] ：{BASE_URL}", BC))
+                    print(paint(f"     · 密钥 [api_key]  ：{masked}", BC))
+                    print(paint("     用法：/model <模型名> 临时切换（仅本次会话；持久化请改 .env 后 /reload）", BC))
+                else:
+                    MODEL = arg
+                    print(paint(f"  🧠 主模型已临时切换为 [main model switched]：{MODEL}"
+                                f"（仅本次会话；接口地址不变 {BASE_URL}）", BG, BOLD))
+                    log(f"[{_ts()}] 主模型临时切换为 {MODEL}")
+                continue
+
+            # ---- /verify 双人核验管理 ----
+            if user_input.startswith("/verify") or user_input.startswith("/vfy"):
+                _sp = user_input.split(None, 1)
+                body = _sp[1].strip() if len(_sp) > 1 else ""
+                _sp2 = body.split(None, 1)
+                sub = _sp2[0].lower() if _sp2 and _sp2[0] else ""
+                arg = _sp2[1].strip() if len(_sp2) > 1 else ""
+
+                if sub in ("on", "auto"):
+                    settings.set("verify_mode", "auto")
+                    print(paint("  🧿 双人核验已开启（auto：仅核验有副作用动作）", BG, BOLD))
+                elif sub == "all":
+                    settings.set("verify_mode", "all")
+                    print(paint("  🧿 双人核验已开启（all：连只读操作也核验）", BG, BOLD))
+                elif sub == "off":
+                    settings.set("verify_mode", "off")
+                    print(paint("  🧿 双人核验已关闭 [verification off]", BR, BOLD))
+                elif sub == "strict":
+                    _on = arg.lower() in ("on", "1", "true", "yes")
+                    settings.set("verify_strict", _on)
+                    print(paint(f"  🧿 严格模式 [strict]：{'ON（超限即拦截）' if _on else 'OFF（超限则放行）'}", BY, BOLD))
+                elif sub == "model":
+                    if not arg:
+                        print(paint(f"  🧿 当前审查员模型 [verifier model]：{verify_tools.MODEL}", BC, BOLD))
+                        print(paint("     用法：/verify model <模型名>", BC))
+                    else:
+                        settings.set("verifier_model", arg)
+                        print(paint(f"  🧿 审查员模型已切换为：{verify_tools.MODEL}", BG, BOLD))
+                elif sub == "answer":
+                    _on = arg.lower() in ("on", "1", "true", "yes")
+                    settings.set("verify_final_answer", _on)
+                    print(paint(f"  🧿 最终答复复核 [review final answer]：{'ON' if _on else 'OFF'}", BY, BOLD))
+                elif sub == "retries":
+                    try:
+                        _n = max(0, int(arg))
+                        settings.set("verify_max_retries", _n)
+                        print(paint(f"  🧿 打回重交上限已设为 {_n}", BG, BOLD))
+                    except (TypeError, ValueError):
+                        print(paint(f"  🧿 当前打回重交上限：{verify_tools.MAX_RETRIES}（用法：/verify retries <n>）", BC, BOLD))
+                elif sub in ("supplements", "suppl"):
+                    try:
+                        _n = max(0, int(arg))
+                        settings.set("verify_max_supplements", _n)
+                        print(paint(f"  🧿 免费补充资料轮数上限已设为 {_n}（不计退回次数）", BG, BOLD))
+                    except (TypeError, ValueError):
+                        print(paint(f"  🧿 当前免费补充资料轮数上限：{VERIFY_MAX_SUPPLEMENTS}"
+                                    f"（用法：/verify supplements <n>）", BC, BOLD))
+                elif sub == "fail":
+                    if arg.lower() in ("open", "closed"):
+                        settings.set("verify_fail_mode", arg.lower())
+                        print(paint(f"  🧿 核验服务不可用时：[{arg.upper()}]", BY, BOLD))
+                    else:
+                        print(paint(f"  🧿 当前故障策略：{verify_tools.FAIL_MODE.upper()}"
+                                    f"（可选 open / closed）", BC, BOLD))
+                elif sub in ("mirror", "watch"):
+                    if arg.lower() in ("on", "off"):
+                        _on = arg.lower() == "on"
+                        settings.set("verify_mirror", _on)
+                        print(paint(f"  📡 审查意见镜像到监控器 [mirror to watcher]："
+                                    f"{'ON' if _on else 'OFF'}"
+                                    f"{' → ' + os.path.basename(VERIFY_MIRROR_PATH) if _on else ''}",
+                                    BG if _on else BR, BOLD))
+                        if _on:
+                            verify_tools.mirror("📡 审查意见镜像已开启 [mirror enabled]")
+                    else:
+                        print(paint(f"  📡 当前镜像 [mirror]：{'ON' if VERIFY_MIRROR else 'OFF'}"
+                                    f"{' → ' + VERIFY_MIRROR_PATH if VERIFY_MIRROR else ''}"
+                                    f"（用法：/verify mirror on|off）", BC, BOLD))
+                elif sub in ("ping", "test"):
+                    print(paint("  🧿 正在自检审查员连通性（真实调用一次）…", BM, BOLD))
+                    _r = verify_tools.review(
+                        [("ws_write", {"path": "__verify_ping__.txt", "content": "ping"})],
+                        user_goal="（连通性自检：该动作无害，应当通过）",
+                        ai_plan="我只想 ping 一下审查员，确认它在线。",
+                    )
+                    _print_verify_line(_r, tag="连通性自检", keep_in_main=True)
+                elif sub == "":
+                    print(paint("  🧿 双人核验状态 [dual-AI verify status]：", BC, BOLD))
+                    print(paint(f"     {verify_tools.mode_label()}", BC))
+                    print(paint(f"     · 最终答复复核：{'ON' if VERIFY_FINAL_ANSWER else 'OFF'}"
+                                f" ｜ 本轮已退回：{_verify_retry}/{VERIFY_MAX_RETRIES}"
+                                f" ｜ 补充资料轮：{_verify_suppl}/{VERIFY_MAX_SUPPLEMENTS}", BC))
+                    print(paint(f"     · 审查意见镜像到监控器 [mirror to watcher]："
+                                f"{'ON' if VERIFY_MIRROR else 'OFF'}"
+                                f"{' → ' + VERIFY_MIRROR_PATH if VERIFY_MIRROR else ''}", BC))
+                    print(paint(f"     · 送审上限 [limits，单位字符]：{verify_tools.limits_label()}", BC))
+                    print(paint("     用法：/verify on | off | all | strict on|off | model <名> | "
+                                "answer on|off | retries <n> | supplements <n> | fail open|closed | mirror on|off | ping", BC))
+                else:
+                    print(paint(f"  ⚠️ 未知参数：{sub}（试试 /verify 看用法）", BR, BOLD))
+                log(f"[{_ts()}] /verify {body}")
+                continue
+
+            # ---- /clear ----
+            if user_input == "/clear":
+                _CMD_TRANSCRIPT.clear()   # 命令暂存一并清空，避免清空历史后又被注入旧命令
+                _USER_EVENTS.clear()      # 用户操作记录一并清空
+                # 重建 system 消息：顺带刷新开工自检（时间 / PID / 工作台可能已变）
+                try:
+                    _SYS_CONTENT = boot_report.system_message(
+                        SYSTEM_PROMPT,
+                        script_path=os.path.abspath(__file__),
+                        workspace_dir=workspace.get_workspace(),
+                        do_scan_peers=_env_bool("BOOT_REPORT_PEERS", True),
+                        verbose=False,
+                    )
+                except Exception:
+                    _SYS_CONTENT = SYSTEM_PROMPT
+                messages = [{"role": "system", "content": _SYS_CONTENT}]
+                print(paint("  🧹 对话历史已清空 [Chat history cleared]", BY, BOLD))
+                log(f"[{_ts()}] 用户清空了历史")
+                continue
+
+            # ---- /reload 重新加载 .env ----
+            if user_input == "/reload":
+                load_dotenv(override=True)
+                new_key    = _env_clean("FATFISH_API_KEY") or _env_clean("DEEPSEEK_API_KEY")
+                new_base   = (_env_clean("FATFISH_BASE_URL") or _env_clean("DEEPSEEK_BASE_URL")
+                              or "https://api.deepseek.com")
+                new_model  = (_env_clean("FATFISH_MODEL") or _env_clean("DEEPSEEK_MODEL")
+                              or "deepseek-flash")
+                new_tavily = _env_clean("TAVILY_API_KEY")
+                if not new_key:
+                    print(paint("  ⚠️  .env 里没读到 API key（FATFISH_API_KEY / DEEPSEEK_API_KEY）"
+                                " [no API key found in .env]", BR, BOLD))
+                    continue
+                API_KEY, BASE_URL, MODEL = new_key, new_base, new_model
+                TAVILY_API_KEY = new_tavily
+                net_tools.set_api_key(new_tavily)
+                client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
+                # 审查员配置一并重载（VERIFIER_* 留空时自动跟随主模型）
+                VERIFY_MIRROR = _env_bool("VERIFY_MIRROR", True)
+                VERIFY_MIRROR_PATH = (os.path.join(LOG_DIR, f"exec_verify_{os.getpid()}.out")
+                                      if VERIFY_MIRROR else "")
+                verify_tools.configure(
+                    api_key=_env_clean("VERIFIER_API_KEY") or API_KEY,
+                    base_url=_env_clean("VERIFIER_BASE_URL") or BASE_URL,
+                    model=_env_clean("VERIFIER_MODEL") or MODEL,
+                    mode=_env_clean("VERIFY_MODE", "auto").lower(),
+                    strict=_env_clean("VERIFY_STRICT", "1").lower()
+                           not in ("0", "false", "no", "off", ""),
+                    max_retries=_env_int("VERIFY_MAX_RETRIES", 2),
+                    fail_mode=_env_clean("VERIFY_FAIL_MODE", "open").lower(),
+                    log_dir=LOG_DIR,
+                    mirror_path=VERIFY_MIRROR_PATH,
+                    mirror_on=VERIFY_MIRROR,
+                    max_tokens=_env_int("VERIFIER_MAX_TOKENS", 0) or None,
+                    timeout=_env_int("VERIFIER_TIMEOUT", 0) or None,
+                    prompt_max_chars=_env_int("VERIFIER_PROMPT_CHARS", 0) or None,
+                    action_preview=_env_int("VERIFIER_ACTION_PREVIEW", 0) or None,
+                    replace_preview=_env_int("VERIFIER_REPLACE_PREVIEW", 0) or None,
+                    goal_max_chars=_env_int("VERIFIER_GOAL_CHARS", 0) or None,
+                    plan_max_chars=_env_int("VERIFIER_PLAN_CHARS", 0) or None,
+                    context_max_chars=_env_int("VERIFIER_CONTEXT_CHARS", 0) or None,
+                    answer_max_chars=_env_int("VERIFIER_ANSWER_CHARS", 0) or None,
+                    answer_ctx_chars=_env_int("VERIFIER_ANSWER_CTX", 0) or None,
+                )
+                VERIFY_FINAL_ANSWER = _env_bool("VERIFY_FINAL_ANSWER", False)
+                print(paint("  🔄 已重新加载 .env [.env reloaded]", BG, BOLD))
+                print(paint(f"     🧠 主模型 [main model]：{MODEL} @ {BASE_URL}", BC))
+                print(paint(f"     🧿 审查员 [verifier]：{verify_tools.MODEL} @ {verify_tools.BASE_URL}", BC))
+                print(paint(f"     📡 审查意见镜像 [mirror]：{'ON' if VERIFY_MIRROR else 'OFF'}"
+                            f"{' → ' + os.path.basename(VERIFY_MIRROR_PATH) if VERIFY_MIRROR else ''}", BC))
+                log(f"[{_ts()}] 用户重载了 .env：model={MODEL} base_url={BASE_URL}")
+                continue
+
+            # ---- /net 切换联网模式 ----
+            if user_input.startswith("/net"):
+                arg = user_input[4:].strip().lower()
+                if arg in ("on", "off", "auto", "ai"):
+                    settings.set("net_mode", arg)
+                    color = {"on": BG, "off": BR, "auto": BY, "ai": BC}[arg]
+                    desc = {"on": "总是联网", "off": "从不联网",
+                            "auto": "关键词规则", "ai": "AI 核验判断（推荐）"}[arg]
+                    print(paint(f"  🌐 联网模式已切换为 [net mode switched to]：{arg.upper()}"
+                                f" —— {desc}", color, BOLD))
+                    log(f"[{_ts()}] 联网模式切换为 {arg}")
+                elif arg == "":
+                    cur = net_tools.NET_MODE.upper()
+                    print(paint(f"  🌐 当前联网模式 [current net mode]：{cur}", BC, BOLD))
+                    print(paint("     on   = 总是联网 [always search]", BC))
+                    print(paint("     off  = 从不联网 [never search]", BC))
+                    print(paint("     auto = 关键词规则 [keyword rules]", BC))
+                    print(paint("     ai   = 🤖 由第二位 AI 核验判断是否需要联网"
+                                "（可顺带改写检索词）[AI-judged, recommended]", BC))
+                    print(paint("     用法 [usage]：/net on | /net off | /net auto | /net ai", BC))
+                else:
+                    print(paint(f"  ⚠️  未知参数 [unknown arg]：{arg}"
+                                f"（可选 [options] on / off / auto / ai）", BR, BOLD))
+                continue
+
+            # ---- /tavily 切换 Tavily 模式 ----
+            if user_input.startswith("/tavily"):
+                arg = user_input[7:].strip().lower()
+                if arg in ("search", "extract", "auto", "both"):
+                    settings.set("tavily_mode", arg)
+                    color = {"search": BC, "extract": BM, "auto": BY, "both": BG}[arg]
+                    desc = {"search": "只搜索", "extract": "只抓正文",
+                            "auto": "有 URL 抓正文，否则搜索", "both": "先搜再抓前几条正文"}[arg]
+                    print(paint(f"  🔍 Tavily 模式已切换为 [mode switched to]：{arg.upper()}"
+                                f" —— {desc}"
+                                + ("（已锁定，AI 不再决定模式）" if arg in ("search", "extract") else ""),
+                                color, BOLD))
+                    log(f"[{_ts()}] Tavily 模式切换为 {arg}")
+                elif arg == "":
+                    print(paint(f"  🔍 当前 Tavily 模式 [current mode]：{net_tools.TAVILY_MODE.upper()}", BC, BOLD))
+                    print(paint("     auto    = 有 URL 抓正文，否则搜索 [auto]", BC))
+                    print(paint("     search  = 强制只搜索（AI 不再决定模式）[force search]", BC))
+                    print(paint("     extract = 强制只抓正文（需 URL）[force extract]", BC))
+                    print(paint("     both    = 先搜索，再抓取结果前 2 条正文 [search + extract]", BC))
+                    print(paint("     用法 [usage]：/tavily auto | search | extract | both", BC))
+                    if net_tools.NET_MODE == "ai":
+                        print(paint("     💡 当前联网模式为 AI：留 auto 即由 AI 决定 search/extract", BY, DIM))
+                else:
+                    print(paint(f"  ⚠️  未知参数 [unknown arg]：{arg}"
+                                f"（可选 [options] auto / search / extract / both）", BR, BOLD))
+                continue
+
+            # ---- /ws 工作台命令 ----
+            if user_input.startswith("/ws"):
+                _handle_ws(user_input)
+                continue
+
+            # ---- /layout：编辑器组布局（P1d）----
+            #     与鼠标操作等价：pre set / split / detach / dock / reset。
+            #     布局改动会由 chat_window 自己在 2 秒后写回 .env（UI_LAYOUT）。
+            if user_input == "/layout" or user_input.startswith("/layout "):
+                try:
+                    print(paint("  " + (_CW.layout_cmd(user_input[7:].strip())
+                                        if _CW is not None else
+                                        "⚠️  对话窗口未启动，没有布局可操作。"),
+                                BC))
+                except Exception as _e:
+                    print(paint("  ⚠️  /layout 执行失败：%s" % _e, BR, BOLD))
+                continue
+
+            # ---- /jobs：查看后台长任务 ----
+            if user_input in ("/jobs", "/job", "/bg"):
+                _jb_ok, _jb_txt = workspace.ws_bg_list()
+                print(paint(_jb_txt, BC))
+                continue
+
+            # ---- /kill [job_id]：中止后台任务 ----
+            #     这是你本人的直接指令，不走报批（AI 调 ws_bg_kill 才需要报批）。
+            if user_input == "/kill" or user_input.startswith("/kill "):
+                _karg = user_input[5:].strip()
+                _kids = [_karg] if _karg else exec_tools.bg_running_ids()
+                if not _kids:
+                    print(paint("  （当前没有正在运行的后台任务）", BK))
+                for _kid in _kids:
+                    _kok, _kmsg = workspace.ws_bg_kill(_kid, "用户 /kill")
+                    print(paint("  " + _kmsg, BG if _kok else BR, BOLD))
+                continue
+
+            # ---- /search 强制搜一次 ----
+            force_search = False
+            if user_input.startswith("/search "):
+                force_search = True
+                user_input = user_input[8:].strip()
+                if not user_input:
+                    print(paint("  ⚠️  /search 后面要跟问题内容 [/search requires a query]", BR, BOLD))
+                    continue
+
+            # 走到这里说明不是纯斜杠命令（普通发言 / /search 深入处理）：
+            # 结束命令捕获，并把「本轮之前敲过的命令 + 输出」注入用户消息前缀。
+            _cmd_abort()
+            _cmd_hist = _take_cmd_transcript()
+            parts = [user_input]
+            if _cmd_hist:
+                parts.insert(0, _cmd_hist)
+            log(f"[{_ts()}] 用户：{user_input}")
+
+            # ---- 1) 文件 / 目录 ----
+            image_blocks = []          # 本轮收集到的图片块（无文件时保持空）
+            file_paths, recursive = file_tools.extract_file_refs(user_input)
+            if file_paths:
+                mode = "递归" if recursive else "一层"
+                _status_mirror(paint(
+                    f"  📂 检测到 [detected] {len(file_paths)} 个路径 [{mode}]，"
+                    f"正在读取 [reading]...", BB, ITAL))
+                block, ok_list, err_list, image_blocks = file_tools.load_files(
+                    file_paths, recursive=recursive)
+                for p in ok_list:
+                    _status_mirror(paint(f"  📄 已读取 [read]：{p}", BG))
+                for p, err in err_list:
+                    # 失败留在主窗口：你需要知道文件没读进来
+                    print(paint(f"  ⚠️  读取失败 [read failed] {p}：{err}", BR, BOLD))
+                if ok_list:
+                    parts.append(block)
+
+            # ---- 2) 联网 ----
+            should_search = False
+            search_query = None
+            search_mode = None
+            search_urls = None
+            if force_search:
+                should_search = True
+            elif net_tools.NET_MODE == "on":
+                should_search = True
+            elif net_tools.NET_MODE == "ai":
+                # 🤖 第二位 AI 判定：要不要联网 + 用 search 还是 extract
+                #    （若用户已用 /tavily 锁定模式，net_tools 会优先尊重它）
+                _wspin = _wait_start("判断是否需要联网")
+                try:
+                    jv = verify_tools.judge_search(user_input, _recent_context(messages))
+                except BaseException as _wexc:
+                    _wait_stop(_wspin, ok=False, label="联网判断失败",
+                               note=type(_wexc).__name__)
+                    raise
+                _wait_stop(_wspin, ok=True, label="联网判断完成")
+                _print_search_judge_line(jv)
+                if jv.get("failed"):
+                    should_search = net_tools.need_search(user_input)
+                    if should_search:
+                        _status_mirror(paint("  🌐 核验异常 → 回退关键词规则：需要联网", BY, DIM))
+                else:
+                    should_search = bool(jv.get("need_search"))
+                    search_mode = jv.get("mode") or None
+                    search_query = jv.get("query") or None
+                    search_urls = jv.get("urls") or None
+            elif net_tools.NET_MODE == "auto":
+                should_search = net_tools.need_search(user_input)
+
+            if should_search:
+                _status_mirror(paint("  🌐 正在联网 [connecting]...", BB, ITAL))
+                _eff_mode = net_tools.TAVILY_MODE if net_tools.TAVILY_MODE in ("search", "extract") \
+                    else (search_mode or net_tools.TAVILY_MODE)
+                if _eff_mode == "extract":
+                    _us = search_urls or net_tools.extract_urls(user_input)
+                    _status_mirror(paint(
+                        f"     📄 模式=extract（抓取正文 {len(_us)} 个 URL）", BB, DIM))
+                else:
+                    if search_query and search_query != user_input:
+                        _status_mirror(paint(
+                            f"     🔎 模式=search ｜ 检索词（已核验改写）：{search_query}", BB, DIM))
+                    else:
+                        _status_mirror(paint(f"     🔎 模式=search", BB, DIM))
+                parts.append("【联网结果】\n" + net_tools.do_network(
+                    user_input, query=search_query, mode=search_mode, urls=search_urls))
+
+            content = file_tools.build_content("\n\n".join(parts), image_blocks)
+            messages.append({"role": "user", "content": content})
+            messages = trim_history(messages, MAX_HISTORY)
+
+            # ---- 3) 调用模型（支持工作台工具循环）----
+            _verify_retry = 0          # 双人核验：本轮退回次数清零（仅 revise 计）
+            _verify_suppl = 0          # 双人核验：本轮「补充资料」轮数清零（不计退回）
+            for _round in range(MAX_TOOL_ROUNDS):
+                # 发送前兜底清洗，杜绝 "tool must follow tool_calls" 报错
+                messages = _sanitize_messages(messages)
+                # 等待动画：模型思考期间原地转圈 + 计时，一眼分辨「在跑」还是卡死
+                _wspin = _wait_start("等待模型响应")
+                try:
+                    resp = _fc_call(  # [STREAM-PATCH v1]
+                        client, MODEL, messages,
+                        temperature=0.7, max_tokens=MAX_REPLY_TOKENS,
+                        timeout=API_TIMEOUT, tools=workspace.TOOL_SCHEMAS,
+                        spin=_wspin,
+                        # 最终答复要送去复核时不能流式：得先拿到全量文本
+                        verifier_guard=(VERIFY_FINAL_ANSWER
+                                        and verify_tools.is_enabled()),
+                    )
+                except BaseException as _wexc:
+                    _wait_stop(_wspin, ok=False, label="模型请求失败",
+                               note=type(_wexc).__name__)
+                    raise
+                if not _fc_spin_done(_wspin):  # [STREAM-PATCH v1]
+                    _wait_stop(_wspin, ok=True, label="模型已响应")
+                choice = resp.choices[0]
+                msg = choice.message
+
+                # 无工具调用 → 正常回复，结束循环
+                if not getattr(msg, "tool_calls", None):
+                    if choice.finish_reason == "length":
+                        print(paint("  ⚠️  回复被 max_tokens 截断，代码可能不完整 [reply truncated, code may be incomplete]！", BR, BOLD))
+                    reply = msg.content or ""
+
+                    # ---- 双人核验：最终答复复核（可选，默认关，/verify answer on 开启）----
+                    _vf_ans_free = _verify_suppl < VERIFY_MAX_SUPPLEMENTS
+                    if VERIFY_FINAL_ANSWER and verify_tools.is_enabled() \
+                            and (_verify_retry < VERIFY_MAX_RETRIES or _vf_ans_free):
+                        _wspin = _wait_start("复核最终答复")
+                        try:
+                            vres = verify_tools.review_answer(
+                                reply,
+                                user_goal=_last_user_text(messages),
+                                context_text=_recent_context(messages),
+                            )
+                        except BaseException as _wexc:
+                            _wait_stop(_wspin, ok=False, label="答复复核失败",
+                                       note=type(_wexc).__name__)
+                            raise
+                        _wait_stop(_wspin, ok=True, label="答复复核完成")
+                        _print_verify_line(vres, tag="答复核验")
+                        if vres.get("blocked"):
+                            # 需求：仅「要求补充资料」（supplement）不计退回次数，只计补充轮数
+                            _vf_suppl_mode = ((vres.get("verdict") or "").strip().lower()
+                                              == "supplement" and _vf_ans_free)
+                            if _vf_suppl_mode:
+                                _verify_suppl += 1
+                                _vf_ans_tag = (f"要求补充/改写答复（不计退回次数，"
+                                               f"补充轮 {_verify_suppl}/{VERIFY_MAX_SUPPLEMENTS}）")
+                            else:
+                                _verify_retry += 1
+                                _vf_ans_tag = f"（第 {_verify_retry}/{VERIFY_MAX_RETRIES} 次）"
+                            print(paint(f"  🔁 审查员{_vf_ans_tag}", BY, BOLD))
+                            log(f"[{_ts()}] 答复核验打回：{vres.get('reason')}"
+                                f"（suppl={_verify_suppl}/{VERIFY_MAX_SUPPLEMENTS}，"
+                                f"retry={_verify_retry}/{VERIFY_MAX_RETRIES}）")
+                            verify_tools.mirror("-" * 60)
+                            verify_tools.mirror(f"[{_ts()}] 🔁 双人核验·答复被打回（{_vf_ans_tag}）")
+                            verify_tools.mirror(f"    理由：{vres.get('reason', '')}")
+                            messages.append({"role": "assistant", "content": reply})
+                            messages.append({"role": "user",
+                                             "content": verify_tools.feedback_text(vres, kind="answer")})
+                            continue
+
+                    if _fc_take_printed():  # [STREAM-PATCH v1]
+                        _fc_finish_answer()   # 正文已实时上屏，只补收尾横线
+                    else:
+                        print_ai(reply)       # 回退路径：照旧整段渲染
+                    try:
+                        _qq_relay(reply)          # [QQMODE-INPROC v1]
+                    except Exception:
+                        pass
+                    _win_push_ai(reply)  # [WINDOW-PATCH v1]
+                    log(f"[{_ts()}] AI：{strip_markup(reply)}")
+                    messages.append({"role": "assistant", "content": reply})
+
+                    saved_files = save_code_files(reply)
+                    if saved_files:
+                        _proc_line(paint(f"  💾 已保存 [saved] {len(saved_files)} 个代码文件 [code files] 到 [to] {CODE_DIR}/",
+                                         BG, BOLD))
+                        for p in saved_files:
+                            _proc_line(paint(f"     • {p}", BC))
+                    break
+
+                # 有工具调用 → 执行并回填
+                messages.append({
+                    "role": "assistant",
+                    "content": msg.content or "",
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments,
+                            },
+                        } for tc in msg.tool_calls
+                    ],
+                })
+
+                # 解析本轮所有工具调用
+                parsed_calls = []
+                for tc in msg.tool_calls:
+                    name = tc.function.name
+                    try:
+                        args = json.loads(tc.function.arguments or "{}")
+                    except json.JSONDecodeError:
+                        args = {}
+                    parsed_calls.append((tc, name, args))
+
+                # ---- 双人核验：把有副作用的动作先交给第二位 AI（审查员）复核 ----
+                v_picks = verify_tools.pick_actions(parsed_calls)
+                # 省 token：静态判定为只读的 ws_run_python 跳过 AI 核验（默认拒绝式判定，
+                #   拿不准就照常送审）。豁免的只是「第二意见」，人工报批照旧生效。
+                #   仅在 auto 模式生效；verify_mode=all（铁壁模式）时一切照旧全审。
+                if v_picks and VERIFY_READONLY_PYTHON and verify_tools.MODE == "auto":
+                    _ro_kept = []
+                    for _pick in v_picks:
+                        if _pick[1] == "ws_run_python":
+                            _ro_code = (_pick[2] or {}).get("code", "") or ""
+                            _is_ro, _ro_why = _python_is_readonly(_ro_code)
+                            if _is_ro:
+                                log(f"[{_ts()}] 只读 Python 免 AI 核验（静态判定通过，"
+                                    f"{len(_ro_code)} 字符；人工报批仍生效）")
+                                continue
+                        _ro_kept.append(_pick)
+                    v_picks = _ro_kept
+                if v_picks:
+                    _status_mirror(paint(
+                        f"  🧿 双人核验中 [verifying] {len(v_picks)} 个动作"
+                        f"（审查员 [verifier]：{verify_tools.MODEL}）…", BM, BOLD))
+                    _wspin = _wait_start("双人核验中")
+                    try:
+                        _v_attempt = _verify_retry + _verify_suppl + 1
+                        vres = verify_tools.review(
+                            [(n, a) for (_i, n, a) in v_picks],
+                            user_goal=_last_user_text(messages),
+                            ai_plan=msg.content or "",
+                            context_text=_recent_context(messages),
+                            user_events=_recent_user_events(),
+                            extra_note=(
+                                f"当前工作台根：{workspace.get_workspace()}\n"
+                                f"本轮第 {_v_attempt} 次送审"
+                                + ("（此前已送审过同一动作，请先核对你的上一条要求"
+                                   "是否已被满足，不要另提无关的新要求）"
+                                   if _v_attempt > 1 else "")
+                                # 如实说明（按档位分述）：被一键放行覆盖的动作没有人工确认了。
+                                # ★ 2026-09-19：范围=all 时删除 / 执行也会被放行，必须让审查员
+                                #   明确知道自己对这一批已无人类兜底（如实告知，不夸大也不隐瞒）。
+                                + ("\n⚠️ 本轮已开启「一键放行」（范围：" + AUTO_APPROVE_SCOPE + "）："
+                                   + {"all": "**含删除 / 执行命令 / 执行代码在内**"
+                                             "（仅敏感文件除外）都会自动放行，"
+                                             "本批不存在任何逐批人工确认",
+                                      "writes": "覆盖内容写入（写 / 追加 / 替换），"
+                                                "删除 / 执行类仍会逐批人工确认",
+                                      "none": "实际不覆盖任何动作（等于回到逐批确认）",
+                                      }.get(AUTO_APPROVE_SCOPE, "覆盖范围见档位说明")
+                                   + "。对这些动作，你是唯一的外部复核 —— "
+                                     "请按原本标准从严把关，"
+                                     "不要因「用户已表示信任」而放宽。"
+                                   if _AUTO_APPROVE_TURN else "")
+                            ),
+                        )
+                    except BaseException as _wexc:
+                        _wait_stop(_wspin, ok=False, label="核验失败",
+                                   note=type(_wexc).__name__)
+                        raise
+                    _wait_stop(_wspin, ok=True, label="核验完成")
+                    _print_verify_line(vres)
+                    if vres.get("blocked"):
+                        # ★ 需求：「要求补充资料」（supplement）不计入退回次数，只计补充轮数；
+                        #   为防审查员反复索取资料造成死循环，另设免费补充轮数上限
+                        #   VERIFY_MAX_SUPPLEMENTS（用尽后按 revise 计入退回次数）。
+                        _vf_vd = (vres.get("verdict") or "").strip().lower()
+                        _vf_soft = (_vf_vd == "supplement"
+                                    and _verify_suppl < VERIFY_MAX_SUPPLEMENTS)
+                        if _vf_soft:
+                            _verify_suppl += 1
+                            _vf_tag = (f"要求补充说明（不计退回次数，"
+                                       f"补充轮 {_verify_suppl}/{VERIFY_MAX_SUPPLEMENTS}）")
+                        elif _verify_retry < VERIFY_MAX_RETRIES:
+                            _verify_retry += 1
+                            _vf_tag = (f"未放行，已打回执行者补充/改方案"
+                                       f"（第 {_verify_retry}/{VERIFY_MAX_RETRIES} 次）")
+                        else:
+                            _vf_tag = ""
+                        if _vf_tag:
+                            # 打回执行者：补充说明或变更方案后重新提交（不执行本批动作）
+                            blocked_idx = {i for (i, _n, _a) in v_picks}
+                            fb = verify_tools.feedback_text(vres)
+                            for i, (tc, name, args) in enumerate(parsed_calls):
+                                content = fb if i in blocked_idx else (
+                                    "（同一批次中其他动作的双人核验未通过，本操作一并暂缓执行；"
+                                    "待执行者补充说明或变更方案后重新提交核验。）")
+                                messages.append({"role": "tool",
+                                                 "tool_call_id": tc.id,
+                                                 "content": content})
+                            print(paint(f"  🔁 审查员{_vf_tag}[sent back for revision]", BY, BOLD))
+                            log(f"[{_ts()}] 双人核验打回：{vres.get('reason')}"
+                                f"（suppl={_verify_suppl}/{VERIFY_MAX_SUPPLEMENTS}，"
+                                f"retry={_verify_retry}/{VERIFY_MAX_RETRIES}）")
+                            verify_tools.mirror("-" * 60)
+                            verify_tools.mirror(f"[{_ts()}] 🔁 双人核验·动作被打回，等待执行者"
+                                                f"（{_vf_tag}）")
+                            verify_tools.mirror(f"    理由：{vres.get('reason', '')}")
+                            verify_tools.mirror("    → 本批动作未执行，已把审查意见回填给执行者。")
+                            continue
+                        if VERIFY_STRICT:
+                            # 超过重试上限 + 严格模式 → 整批拦截
+                            fb = verify_tools.feedback_text(vres, final=True)
+                            for tc, name, args in parsed_calls:
+                                messages.append({"role": "tool",
+                                                 "tool_call_id": tc.id,
+                                                 "content": fb})
+                            print(paint("  🛑 已达双人核验重试上限，动作被拦截 "
+                                        "[verification retry limit reached — blocked]", BR, BOLD))
+                            log(f"[{_ts()}] 双人核验超限拦截：{vres.get('reason')}")
+                            verify_tools.mirror("-" * 60)
+                            verify_tools.mirror(f"[{_ts()}] 🛑 双人核验超限 → 动作被拦截"
+                                                f"（严格模式，全批未执行）")
+                            verify_tools.mirror(f"    理由：{vres.get('reason', '')}")
+                            break
+                        _status_mirror(paint(
+                            "  ⚠️ 已达双人核验重试上限，按宽松模式放行 "
+                            "[retry limit reached — proceeding leniently]", BY, BOLD))
+                        log(f"[{_ts()}] 双人核验超限放行（宽松）：{vres.get('reason')}")
+                        verify_tools.mirror("-" * 60)
+                        verify_tools.mirror(f"[{_ts()}] ⚠️ 双人核验超限 → 宽松模式放行"
+                                            f"（继续走人工报批）")
+                        verify_tools.mirror(f"    理由：{vres.get('reason', '')}")
+
+                # ---- 批量报批：把需要批准的工具调用汇总，问一次 ----
+                #   判定已收敛到 _approval_needed()：写/删/执行必报批；
+                #   ws_read 默认免报批，但命中敏感文件（.env / 密钥 / 凭据）时强制恢复报批。
+                #
+                # ★ 2026-09-19：一键放行**不再覆盖高危动作**（见 _never_auto_approve）。
+                #   否则人工闸门被整体跳过，审查员 AI 会成为事实上的最终裁定者。
+                #   本批需要批准的动作按索引分流：可自动放行的 / 必须亲手确认的。
+                _need = [(i, n, a) for i, (_tc, n, a) in enumerate(parsed_calls)
+                         if _approval_needed(n, a)[0]]
+                approval_reply = None
+                _deny = set()
+                if _need:
+                    _auto_i, _must = set(), []
+                    for _i, _n, _a in _need:
+                        if _AUTO_APPROVE_TURN and not _never_auto_approve(_n, _a):
+                            _auto_i.add(_i)
+                        else:
+                            _must.append((_i, _n, _a))
+                    if _auto_i:
+                        _auto_names = ", ".join(sorted(parsed_calls[_i][1] for _i in _auto_i))
+                        _status_mirror(paint(
+                            f"  🔓 本轮自动放行 {len(_auto_i)} 个内容写入操作（无需再确认）"
+                            f"[auto-approved: {len(_auto_i)} write op(s)]", BB, DIM))
+                        log(f"[{_ts()}] 自动放行 {len(_auto_i)} 个内容写入操作"
+                            f"（scope={AUTO_APPROVE_SCOPE}）：{_auto_names}")
+                    if _must:
+                        if _AUTO_APPROVE_TURN:
+                            print(paint(f"  🛡 另有 {len(_must)} 个动作属「永不自动放行」类别"
+                                        f"（删除 / 执行 / 敏感文件），仍需你亲手确认"
+                                        f" [never auto-approved: {len(_must)}]", BR, BOLD))
+                        _ok2, approval_reply = _request_approval(
+                            [(n, a) for (_i, n, a) in _must])
+                        if not _ok2:
+                            _deny = {i for (i, _n, _a) in _must}
+
+                # ---- 逐个执行 ----
+                # 非只读工具执行期间转圈：用**反向帧**（/ | \ -），与「模型思考」的
+                # 正向帧（- \ | /）方向相反 —— 一眼能看出是「机器在跑」而非「模型在想」。
+                # ★ 顺序保证：人工报批（_request_approval 里的 input）已在上方结束，
+                #   此处才起动画，避免动画的 \r 覆盖掉审批提示。
+                # ★ try/finally：异常 / 中断 / 提前跳出都不在屏幕上留残影。
+                _wx = None
+                _wx_ok = True
+                _aborted = False
+                try:
+                    for _idx, (tc, name, args) in enumerate(parsed_calls):
+                        if _aborted:
+                            # 本批已被用户中止 → 剩余动作不再执行，但仍回填 tool 消息，
+                            # 保证 assistant(tool_calls) 与 tool 消息数量对齐：
+                            # 否则 _sanitize_messages 会把整组丢弃，模型看不到「已中止」。
+                            ok, result = False, (
+                                "⛔ 本批已被用户中止，该动作未执行。"
+                                "请勿自行重试，先向用户确认是否继续。")
+                        elif _idx in _deny:
+                            # 用户拒绝 → 不执行，回填拒绝说明
+                            ok, result = False, approval_reply
+                        else:
+                            if name not in READ_ONLY_TOOLS:
+                                _lbl = _exec_wait_label(name, args)
+                                if _wx is None:
+                                    _wx = _wait_start(_lbl, frames=WAIT_FRAMES_REV,
+                                                      start_delay=WAIT_ANIM_DELAY,
+                                                      detail=exec_tools.progress_hint)
+                                else:
+                                    _wx.label_to(_lbl)
+                            ok, result = workspace.call_tool(name, args)
+                            if not ok:
+                                _wx_ok = False
+                            if exec_tools.LAST_ABORTED:
+                                # 路径 A（主窗口 Ctrl+C）/ C（监控器按 K）：用户中止
+                                _aborted = True
+                                _wx_ok = False
+                        icon = "✅" if ok else "⚠️"
+                        color = BG if ok else BR
+                        first = result.splitlines()[0][:100] if result else ""
+                        # 成功 → 状态台；**失败仍留在主窗口**（不让你漏掉异常）
+                        _proc_line(paint(
+                            f"  {icon} 工作台 [workspace] {name} → {first}", color),
+                            keep_in_main=not ok)
+                        log(f"[{_ts()}] TOOL {name}({args}) -> {result}")
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": result,
+                        })
+                finally:
+                    _wait_stop(_wx, ok=_wx_ok,
+                               label="已中止" if _aborted else
+                                     ("执行完成" if _wx_ok else "执行完成（有失败项）"))
+                    if _aborted:
+                        print(paint("  ⛔ 已按你的指令中止本批执行 [aborted by user]"
+                                    "｜剩余动作未运行，已把中止情况回填给模型", BR, BOLD))
+                        log(f"[{_ts()}] 用户中止执行：本批剩余动作未运行")
+            else:
+                print(paint("  ⚠️  工具调用轮次达到上限，已强制停止 [tool-call round limit reached, stopped]", BY, BOLD))
+
+        except KeyboardInterrupt:
+            _TIMER_EXITING = True
+            _quit_clean = True            # [QUIT-CLEAN v1] Ctrl+C 也算主动退出
+            print("\n" + rainbow("  ✨ 已退出，下次见 [Exited, see you] ✨  "))
             _sig = ui_core.signature()
             if _sig:
                 print(ui_core.paint("  ✎ " + _sig, ui_core.BK, ui_core.ITAL))
-            log(f"[{_ts()}] === 会话正常结束 ===")
+            log(f"[{_ts()}] === 用户中断 ===")
             break
-
-        # ---- /help ----
-        if user_input == "/help":
-            print(paint(HELP_TEXT, BY))
-            continue
-
-        # ---- /status 运行状态一览 ----
-        if user_input in ("/status", "/st"):
-            print(paint("  📋 运行状态 [runtime status]", BC, BOLD))
-            print_startup_status()
-            print(paint("  （各项均可单独调整：/set 查看与修改参数）", BC, DIM))
-            continue
-
-        # ---- /set 统一设置中心 ----
-        if user_input == "/set" or user_input.startswith("/set ") or user_input == "/settings":
-            body = "" if user_input == "/settings" else user_input[4:].strip()
-            parts = body.split(None, 1)
-            sub = parts[0].lower() if parts else ""
-            arg = parts[1].strip() if len(parts) > 1 else ""
-
-            # /set                     → 列表
-            if sub == "":
-                print(paint(settings.render(show_all=False), BC))
-            # /set all                 → 含进阶项
-            elif sub == "all":
-                print(paint(settings.render(show_all=True), BC))
-            # /set diff                → 只看偏离项
-            elif sub in ("diff", "改过"):
-                print(paint(settings.render_diff(), BY))
-            # /set profile [名] [--reset] [--show]  → 预设方案
-            elif sub in ("profile", "profiles", "方案", "预设"):
-                a = arg.lower()
-                if a in ("", "list", "ls"):
-                    print(paint(settings.render_profiles(), BC))
-                else:
-                    tokens = arg.split()
-                    name = tokens[0]
-                    do_reset = "--reset" in tokens
-                    do_show = "--show" in tokens or "--preview" in tokens
-                    if do_show:
-                        print(paint(settings.profile_preview(name), BC))
-                    else:
-                        ok, msg, applied, failed = settings.apply_profile(
-                            name, reset_first=do_reset)
-                        print(paint(("  " if ok else "  ⚠️  ") + msg,
-                                    BG if ok else BR, BOLD))
-                        if applied:
-                            for k, old, new in applied:
-                                rec = settings.record(k)
-                                print(paint(f"       · {k:<26} {rec.fmt(old):<14} → {rec.fmt(new)}",
-                                            BC, DIM))
-                        if ok:
-                            print(paint("     （仅本次运行生效；要持久化用 /set save）", BC, DIM))
-            # /set save                → 写入 .env
-            elif sub == "save":
-                ok, msg = settings.save_to_env()
-                print(paint("  💾 " + msg, BG if ok else BR, BOLD))
-            # /set reset [key]         → 还原
-            elif sub in ("reset", "default", "恢复"):
-                ok, msg, changed = settings.reset(arg or None)
-                print(paint(("  ♻️  " if ok else "  ⚠️  ") + msg, BG if ok else BR, BOLD))
-                if changed:
-                    print(paint("     （仅本次运行生效；想持久化请 /set save，"
-                                "或把 .env 里对应的行删掉）", BC, DIM))
+        except EOFError:
+            # ★ stdin 已关闭（管道读完 / 输入被重定向耗尽 / 窗口被关）。
+            #   没有输入源了 —— 必须在这里退出！
+            #   否则会落进下面的 `except Exception`，每轮重试一次 input()，
+            #   表现为「每 3 秒刷一条错误、程序永不结束」的假死循环。
+            _TIMER_EXITING = True
+            print()
+            print(paint("  📪 输入已结束 [stdin closed]，程序退出 [exiting]", BY, BOLD))
+            log(f"[{_ts()}] === stdin 关闭，退出 ===")
+            break
+        except Exception as e:
+            print(paint(f"  ❌ 出错了 [error]：{e}", BR, BOLD))
+            # ---- 防刷屏：同一个错误连续出现时降频 ----
+            # 若错误发生在本轮「取输入之前」（例如某处未定义、环境异常），
+            # 主循环会立刻回头再撞一次 —— 那是 100% CPU 的无限刷屏。
+            # 这里前 5 次照常打印，之后每 3 秒才提示一次并累计次数，
+            # 既不掩盖问题，也不把终端和 CPU 烧穿。
+            _esig = "%s: %s" % (type(e).__name__, e)
+            if _esig == _last_err_sig:
+                _err_streak += 1
             else:
-                # /set <key>            → 查看单项
-                # /set <key> <value>    → 设置
-                key = sub
-                if arg == "":
-                    if settings.has(key):
-                        print(paint(settings.render(key), BC))
-                    else:
-                        print(paint(f"  ⚠️ 未知设置项：{key}（用 /set 查看全部）", BR, BOLD))
-                else:
-                    ok, msg = settings.set(key, arg)
-                    color = BG if ok else BR
-                    print(paint(("  ✅ " if ok else "  ⚠️  ") + msg, color, BOLD))
-                    if ok:
-                        print(paint("     （仅本次运行生效；要持久化用 /set save）", BC, DIM))
-            log(f"[{_ts()}] /set {body}")
-            continue
+                _last_err_sig, _err_streak = _esig, 1
+            if _err_streak >= 5:
+                if _err_streak == 5 or _err_streak % 10 == 0:
+                    print(paint(
+                        f"  ⚠️ 同一错误已连续出现 {_err_streak} 次，已降频到每 3 秒提示一次"
+                        f"（按 Ctrl+C 可退出；修复后重启即可）", BY, DIM))
+                time.sleep(3)
+        finally:
+            # 无论这一轮是正常回复、斜杠命令（continue）、还是异常，
+            # 都在末尾统一结算计时，保证"跑完 → 等你发话"这条线不断。
+            _cmd_finalize()      # 斜杠命令：把「命令 + 输出」暂存，供下次注入给模型
+            _mark_round_end()
 
-        # ---- /timer 计时显示开关 ----
-        # ---- [QQMODE-INPROC v1] /qq 跟随模式 ----
-        if _qq_handle_cmd(user_input):
-            continue
 
-        # ---- [STREAM-PATCH v1] /stream 流式开关 ----
-        if _fc_handle_cmd(user_input):
-            continue
+# ============================================================
+# [P0-B] 启动：Tk 回主线程（FATFISH_TK_MAIN=0 可退回旧模型）
+# ============================================================
 
-        # ---- [WINDOW-PATCH v1] /window 对话窗口 ----
-        if _win_handle_cmd(user_input):
-            continue
 
-        if user_input.startswith("/timer"):
-            arg = user_input[6:].strip().lower()
-            if arg in ("on", "off"):
-                settings.set("show_timer", arg == "on")
-                print(paint(f"  ⏱️ 计时 {'ON' if SHOW_TIMER else 'OFF'}",
-                            BG if SHOW_TIMER else BR, BOLD))
-                log(f"[{_ts()}] 计时显示切换为 {SHOW_TIMER}")
-            elif arg == "":
-                extra = (f" ｜ 距上轮 {_fmt_secs(time.time() - last_round_end())}"
-                         if last_round_end() is not None else "")
-                print(paint(f"  ⏱️ 计时 {'ON' if SHOW_TIMER else 'OFF'}{extra}", BC, BOLD))
-                print(paint("     /timer on | /timer off", BC))
-            else:
-                print(paint(f"  ⚠️ 未知参数：{arg}（可选 on / off）", BR, BOLD))
-            continue
+def _run_gui_first():
+    """GUI 为主：主线程跑 Tk，agent 循环进子线程。
 
-        # ---- /auto 一键放行管理 ----
-        if user_input.startswith("/auto"):
-            arg = user_input[5:].strip().lower()
-            if arg in ("on", "off"):
-                settings.set("auto_approve_enabled", arg == "on")
-                if not AUTO_APPROVE_ENABLED:
-                    _AUTO_APPROVE_TURN = False      # 关掉时立刻收回本轮放行
-                print(paint(f"  🔐 一键放行 {'ON' if AUTO_APPROVE_ENABLED else 'OFF'}",
-                            BG if AUTO_APPROVE_ENABLED else BR, BOLD))
-                log(f"[{_ts()}] 一键放行切换为 {AUTO_APPROVE_ENABLED}")
-            elif arg in ("now", "go"):
-                _AUTO_APPROVE_TURN = True
-                print(paint("  🔓 本轮已放行：后续读写操作不再询问"
-                            "（你发下一条命令后自动恢复报批）", BG, BOLD))
-                log(f"[{_ts()}] 用户手动放行本轮")
-            elif arg == "":
-                print(paint(
-                    f"  🔐 一键放行：{'ON' if AUTO_APPROVE_ENABLED else 'OFF'}"
-                    f" ｜ 本轮：{'已放行' if _AUTO_APPROVE_TURN else '未放行'}"
-                    f" ｜ 每轮默认：{'已放行' if AUTO_APPROVE_DEFAULT else '需报批'}", BC, BOLD))
-                print(paint("     /auto on | /auto off 开关功能 ｜ /auto now 立刻放行本轮", BC))
-            else:
-                print(paint(f"  ⚠️ 未知参数：{arg}（可选 on / off / now）", BR, BOLD))
-            continue
+    返回 True 表示已接管；False 表示不可用 → 调用方回退旧模型（主线程跑循环）。
+    """
+    if not _TK_MAIN or _CW is None:
+        return False
+    try:
+        w = _CW.start_main_thread(on_send=None, model=MODEL,
+                                  workspace=workspace.get_workspace())
+    except Exception as _e:
+        _proc_line(paint("  ⚠️  [P0-B] 主线程建窗失败：%s；回退旧模型" % _e, BY, BOLD))
+        return False
+    if not w:
+        _proc_line(paint("  ⚠️  [P0-B] 窗口没能创建（可能无图形会话）；回退旧模型",
+                         BY, BOLD))
+        return False
 
-        # ---- /model 主模型查看 / 临时切换 ----
-        if user_input == "/model" or user_input.startswith("/model "):
-            arg = user_input[6:].strip()
-            if not arg:
-                masked = ("（未配置）" if not API_KEY else
-                          (API_KEY[:6] + "…" + API_KEY[-4:]) if len(API_KEY) > 12 else "已配置")
-                print(paint("  🧠 主模型 [main model] 状态：", BC, BOLD))
-                print(paint(f"     · 模型 [model]    ：{MODEL}", BC))
-                print(paint(f"     · 接口 [base_url] ：{BASE_URL}", BC))
-                print(paint(f"     · 密钥 [api_key]  ：{masked}", BC))
-                print(paint("     用法：/model <模型名> 临时切换（仅本次会话；持久化请改 .env 后 /reload）", BC))
-            else:
-                MODEL = arg
-                print(paint(f"  🧠 主模型已临时切换为 [main model switched]：{MODEL}"
-                            f"（仅本次会话；接口地址不变 {BASE_URL}）", BG, BOLD))
-                log(f"[{_ts()}] 主模型临时切换为 {MODEL}")
-            continue
+    _TK_MAIN_OWNS_WINDOW[0] = True
+    _AGENT_EXIT_ON_WIN_CLOSE[0] = True
+    _win_wire_output(quiet=False)
 
-        # ---- /verify 双人核验管理 ----
-        if user_input.startswith("/verify") or user_input.startswith("/vfy"):
-            _sp = user_input.split(None, 1)
-            body = _sp[1].strip() if len(_sp) > 1 else ""
-            _sp2 = body.split(None, 1)
-            sub = _sp2[0].lower() if _sp2 and _sp2[0] else ""
-            arg = _sp2[1].strip() if len(_sp2) > 1 else ""
+    # ---- agent 循环进子线程（daemon=False：让它在主线程退出前把活干完）----
+    _agent = threading.Thread(target=_agent_main, name="fatfish-agent")
+    _agent.daemon = False
+    _agent.start()
+    print(paint("  🧵 [P0-B] Tk 已归主线程；agent 循环运行在子线程", BC, DIM))
 
-            if sub in ("on", "auto"):
-                settings.set("verify_mode", "auto")
-                print(paint("  🧿 双人核验已开启（auto：仅核验有副作用动作）", BG, BOLD))
-            elif sub == "all":
-                settings.set("verify_mode", "all")
-                print(paint("  🧿 双人核验已开启（all：连只读操作也核验）", BG, BOLD))
-            elif sub == "off":
-                settings.set("verify_mode", "off")
-                print(paint("  🧿 双人核验已关闭 [verification off]", BR, BOLD))
-            elif sub == "strict":
-                _on = arg.lower() in ("on", "1", "true", "yes")
-                settings.set("verify_strict", _on)
-                print(paint(f"  🧿 严格模式 [strict]：{'ON（超限即拦截）' if _on else 'OFF（超限则放行）'}", BY, BOLD))
-            elif sub == "model":
-                if not arg:
-                    print(paint(f"  🧿 当前审查员模型 [verifier model]：{verify_tools.MODEL}", BC, BOLD))
-                    print(paint("     用法：/verify model <模型名>", BC))
-                else:
-                    settings.set("verifier_model", arg)
-                    print(paint(f"  🧿 审查员模型已切换为：{verify_tools.MODEL}", BG, BOLD))
-            elif sub == "answer":
-                _on = arg.lower() in ("on", "1", "true", "yes")
-                settings.set("verify_final_answer", _on)
-                print(paint(f"  🧿 最终答复复核 [review final answer]：{'ON' if _on else 'OFF'}", BY, BOLD))
-            elif sub == "retries":
-                try:
-                    _n = max(0, int(arg))
-                    settings.set("verify_max_retries", _n)
-                    print(paint(f"  🧿 打回重交上限已设为 {_n}", BG, BOLD))
-                except (TypeError, ValueError):
-                    print(paint(f"  🧿 当前打回重交上限：{verify_tools.MAX_RETRIES}（用法：/verify retries <n>）", BC, BOLD))
-            elif sub in ("supplements", "suppl"):
-                try:
-                    _n = max(0, int(arg))
-                    settings.set("verify_max_supplements", _n)
-                    print(paint(f"  🧿 免费补充资料轮数上限已设为 {_n}（不计退回次数）", BG, BOLD))
-                except (TypeError, ValueError):
-                    print(paint(f"  🧿 当前免费补充资料轮数上限：{VERIFY_MAX_SUPPLEMENTS}"
-                                f"（用法：/verify supplements <n>）", BC, BOLD))
-            elif sub == "fail":
-                if arg.lower() in ("open", "closed"):
-                    settings.set("verify_fail_mode", arg.lower())
-                    print(paint(f"  🧿 核验服务不可用时：[{arg.upper()}]", BY, BOLD))
-                else:
-                    print(paint(f"  🧿 当前故障策略：{verify_tools.FAIL_MODE.upper()}"
-                                f"（可选 open / closed）", BC, BOLD))
-            elif sub in ("mirror", "watch"):
-                if arg.lower() in ("on", "off"):
-                    _on = arg.lower() == "on"
-                    settings.set("verify_mirror", _on)
-                    print(paint(f"  📡 审查意见镜像到监控器 [mirror to watcher]："
-                                f"{'ON' if _on else 'OFF'}"
-                                f"{' → ' + os.path.basename(VERIFY_MIRROR_PATH) if _on else ''}",
-                                BG if _on else BR, BOLD))
-                    if _on:
-                        verify_tools.mirror("📡 审查意见镜像已开启 [mirror enabled]")
-                else:
-                    print(paint(f"  📡 当前镜像 [mirror]：{'ON' if VERIFY_MIRROR else 'OFF'}"
-                                f"{' → ' + VERIFY_MIRROR_PATH if VERIFY_MIRROR else ''}"
-                                f"（用法：/verify mirror on|off）", BC, BOLD))
-            elif sub in ("ping", "test"):
-                print(paint("  🧿 正在自检审查员连通性（真实调用一次）…", BM, BOLD))
-                _r = verify_tools.review(
-                    [("ws_write", {"path": "__verify_ping__.txt", "content": "ping"})],
-                    user_goal="（连通性自检：该动作无害，应当通过）",
-                    ai_plan="我只想 ping 一下审查员，确认它在线。",
-                )
-                _print_verify_line(_r, tag="连通性自检", keep_in_main=True)
-            elif sub == "":
-                print(paint("  🧿 双人核验状态 [dual-AI verify status]：", BC, BOLD))
-                print(paint(f"     {verify_tools.mode_label()}", BC))
-                print(paint(f"     · 最终答复复核：{'ON' if VERIFY_FINAL_ANSWER else 'OFF'}"
-                            f" ｜ 本轮已退回：{_verify_retry}/{VERIFY_MAX_RETRIES}"
-                            f" ｜ 补充资料轮：{_verify_suppl}/{VERIFY_MAX_SUPPLEMENTS}", BC))
-                print(paint(f"     · 审查意见镜像到监控器 [mirror to watcher]："
-                            f"{'ON' if VERIFY_MIRROR else 'OFF'}"
-                            f"{' → ' + VERIFY_MIRROR_PATH if VERIFY_MIRROR else ''}", BC))
-                print(paint(f"     · 送审上限 [limits，单位字符]：{verify_tools.limits_label()}", BC))
-                print(paint("     用法：/verify on | off | all | strict on|off | model <名> | "
-                            "answer on|off | retries <n> | supplements <n> | fail open|closed | mirror on|off | ping", BC))
-            else:
-                print(paint(f"  ⚠️ 未知参数：{sub}（试试 /verify 看用法）", BR, BOLD))
-            log(f"[{_ts()}] /verify {body}")
-            continue
+    # ---- 主线程专职跑 Tk（阻塞在这里，直到窗口关闭）----
+    _CW.run_mainloop()
 
-        # ---- /clear ----
-        if user_input == "/clear":
-            _CMD_TRANSCRIPT.clear()   # 命令暂存一并清空，避免清空历史后又被注入旧命令
-            _USER_EVENTS.clear()      # 用户操作记录一并清空
-            # 重建 system 消息：顺带刷新开工自检（时间 / PID / 工作台可能已变）
-            try:
-                _SYS_CONTENT = boot_report.system_message(
-                    SYSTEM_PROMPT,
-                    script_path=os.path.abspath(__file__),
-                    workspace_dir=workspace.get_workspace(),
-                    do_scan_peers=_env_bool("BOOT_REPORT_PEERS", True),
-                    verbose=False,
-                )
-            except Exception:
-                _SYS_CONTENT = SYSTEM_PROMPT
-            messages = [{"role": "system", "content": _SYS_CONTENT}]
-            print(paint("  🧹 对话历史已清空 [Chat history cleared]", BY, BOLD))
-            log(f"[{_ts()}] 用户清空了历史")
-            continue
+    # ---- 窗口关闭 → 唤醒 agent 退出 ----
+    try:
+        _agent.join(timeout=10.0)
+    except Exception:
+        pass
+    return True
 
-        # ---- /reload 重新加载 .env ----
-        if user_input == "/reload":
-            load_dotenv(override=True)
-            new_key    = _env_clean("FATFISH_API_KEY") or _env_clean("DEEPSEEK_API_KEY")
-            new_base   = (_env_clean("FATFISH_BASE_URL") or _env_clean("DEEPSEEK_BASE_URL")
-                          or "https://api.deepseek.com")
-            new_model  = (_env_clean("FATFISH_MODEL") or _env_clean("DEEPSEEK_MODEL")
-                          or "deepseek-flash")
-            new_tavily = _env_clean("TAVILY_API_KEY")
-            if not new_key:
-                print(paint("  ⚠️  .env 里没读到 API key（FATFISH_API_KEY / DEEPSEEK_API_KEY）"
-                            " [no API key found in .env]", BR, BOLD))
-                continue
-            API_KEY, BASE_URL, MODEL = new_key, new_base, new_model
-            TAVILY_API_KEY = new_tavily
-            net_tools.set_api_key(new_tavily)
-            client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
-            # 审查员配置一并重载（VERIFIER_* 留空时自动跟随主模型）
-            VERIFY_MIRROR = _env_bool("VERIFY_MIRROR", True)
-            VERIFY_MIRROR_PATH = (os.path.join(LOG_DIR, f"exec_verify_{os.getpid()}.out")
-                                  if VERIFY_MIRROR else "")
-            verify_tools.configure(
-                api_key=_env_clean("VERIFIER_API_KEY") or API_KEY,
-                base_url=_env_clean("VERIFIER_BASE_URL") or BASE_URL,
-                model=_env_clean("VERIFIER_MODEL") or MODEL,
-                mode=_env_clean("VERIFY_MODE", "auto").lower(),
-                strict=_env_clean("VERIFY_STRICT", "1").lower()
-                       not in ("0", "false", "no", "off", ""),
-                max_retries=_env_int("VERIFY_MAX_RETRIES", 2),
-                fail_mode=_env_clean("VERIFY_FAIL_MODE", "open").lower(),
-                log_dir=LOG_DIR,
-                mirror_path=VERIFY_MIRROR_PATH,
-                mirror_on=VERIFY_MIRROR,
-                max_tokens=_env_int("VERIFIER_MAX_TOKENS", 0) or None,
-                timeout=_env_int("VERIFIER_TIMEOUT", 0) or None,
-                prompt_max_chars=_env_int("VERIFIER_PROMPT_CHARS", 0) or None,
-                action_preview=_env_int("VERIFIER_ACTION_PREVIEW", 0) or None,
-                replace_preview=_env_int("VERIFIER_REPLACE_PREVIEW", 0) or None,
-                goal_max_chars=_env_int("VERIFIER_GOAL_CHARS", 0) or None,
-                plan_max_chars=_env_int("VERIFIER_PLAN_CHARS", 0) or None,
-                context_max_chars=_env_int("VERIFIER_CONTEXT_CHARS", 0) or None,
-                answer_max_chars=_env_int("VERIFIER_ANSWER_CHARS", 0) or None,
-                answer_ctx_chars=_env_int("VERIFIER_ANSWER_CTX", 0) or None,
-            )
-            VERIFY_FINAL_ANSWER = _env_bool("VERIFY_FINAL_ANSWER", False)
-            print(paint("  🔄 已重新加载 .env [.env reloaded]", BG, BOLD))
-            print(paint(f"     🧠 主模型 [main model]：{MODEL} @ {BASE_URL}", BC))
-            print(paint(f"     🧿 审查员 [verifier]：{verify_tools.MODEL} @ {verify_tools.BASE_URL}", BC))
-            print(paint(f"     📡 审查意见镜像 [mirror]：{'ON' if VERIFY_MIRROR else 'OFF'}"
-                        f"{' → ' + os.path.basename(VERIFY_MIRROR_PATH) if VERIFY_MIRROR else ''}", BC))
-            log(f"[{_ts()}] 用户重载了 .env：model={MODEL} base_url={BASE_URL}")
-            continue
 
-        # ---- /net 切换联网模式 ----
-        if user_input.startswith("/net"):
-            arg = user_input[4:].strip().lower()
-            if arg in ("on", "off", "auto", "ai"):
-                settings.set("net_mode", arg)
-                color = {"on": BG, "off": BR, "auto": BY, "ai": BC}[arg]
-                desc = {"on": "总是联网", "off": "从不联网",
-                        "auto": "关键词规则", "ai": "AI 核验判断（推荐）"}[arg]
-                print(paint(f"  🌐 联网模式已切换为 [net mode switched to]：{arg.upper()}"
-                            f" —— {desc}", color, BOLD))
-                log(f"[{_ts()}] 联网模式切换为 {arg}")
-            elif arg == "":
-                cur = net_tools.NET_MODE.upper()
-                print(paint(f"  🌐 当前联网模式 [current net mode]：{cur}", BC, BOLD))
-                print(paint("     on   = 总是联网 [always search]", BC))
-                print(paint("     off  = 从不联网 [never search]", BC))
-                print(paint("     auto = 关键词规则 [keyword rules]", BC))
-                print(paint("     ai   = 🤖 由第二位 AI 核验判断是否需要联网"
-                            "（可顺带改写检索词）[AI-judged, recommended]", BC))
-                print(paint("     用法 [usage]：/net on | /net off | /net auto | /net ai", BC))
-            else:
-                print(paint(f"  ⚠️  未知参数 [unknown arg]：{arg}"
-                            f"（可选 [options] on / off / auto / ai）", BR, BOLD))
-            continue
-
-        # ---- /tavily 切换 Tavily 模式 ----
-        if user_input.startswith("/tavily"):
-            arg = user_input[7:].strip().lower()
-            if arg in ("search", "extract", "auto", "both"):
-                settings.set("tavily_mode", arg)
-                color = {"search": BC, "extract": BM, "auto": BY, "both": BG}[arg]
-                desc = {"search": "只搜索", "extract": "只抓正文",
-                        "auto": "有 URL 抓正文，否则搜索", "both": "先搜再抓前几条正文"}[arg]
-                print(paint(f"  🔍 Tavily 模式已切换为 [mode switched to]：{arg.upper()}"
-                            f" —— {desc}"
-                            + ("（已锁定，AI 不再决定模式）" if arg in ("search", "extract") else ""),
-                            color, BOLD))
-                log(f"[{_ts()}] Tavily 模式切换为 {arg}")
-            elif arg == "":
-                print(paint(f"  🔍 当前 Tavily 模式 [current mode]：{net_tools.TAVILY_MODE.upper()}", BC, BOLD))
-                print(paint("     auto    = 有 URL 抓正文，否则搜索 [auto]", BC))
-                print(paint("     search  = 强制只搜索（AI 不再决定模式）[force search]", BC))
-                print(paint("     extract = 强制只抓正文（需 URL）[force extract]", BC))
-                print(paint("     both    = 先搜索，再抓取结果前 2 条正文 [search + extract]", BC))
-                print(paint("     用法 [usage]：/tavily auto | search | extract | both", BC))
-                if net_tools.NET_MODE == "ai":
-                    print(paint("     💡 当前联网模式为 AI：留 auto 即由 AI 决定 search/extract", BY, DIM))
-            else:
-                print(paint(f"  ⚠️  未知参数 [unknown arg]：{arg}"
-                            f"（可选 [options] auto / search / extract / both）", BR, BOLD))
-            continue
-
-        # ---- /ws 工作台命令 ----
-        if user_input.startswith("/ws"):
-            _handle_ws(user_input)
-            continue
-
-        # ---- /jobs：查看后台长任务 ----
-        if user_input in ("/jobs", "/job", "/bg"):
-            _jb_ok, _jb_txt = workspace.ws_bg_list()
-            print(paint(_jb_txt, BC))
-            continue
-
-        # ---- /kill [job_id]：中止后台任务 ----
-        #     这是你本人的直接指令，不走报批（AI 调 ws_bg_kill 才需要报批）。
-        if user_input == "/kill" or user_input.startswith("/kill "):
-            _karg = user_input[5:].strip()
-            _kids = [_karg] if _karg else exec_tools.bg_running_ids()
-            if not _kids:
-                print(paint("  （当前没有正在运行的后台任务）", BK))
-            for _kid in _kids:
-                _kok, _kmsg = workspace.ws_bg_kill(_kid, "用户 /kill")
-                print(paint("  " + _kmsg, BG if _kok else BR, BOLD))
-            continue
-
-        # ---- /search 强制搜一次 ----
-        force_search = False
-        if user_input.startswith("/search "):
-            force_search = True
-            user_input = user_input[8:].strip()
-            if not user_input:
-                print(paint("  ⚠️  /search 后面要跟问题内容 [/search requires a query]", BR, BOLD))
-                continue
-
-        # 走到这里说明不是纯斜杠命令（普通发言 / /search 深入处理）：
-        # 结束命令捕获，并把「本轮之前敲过的命令 + 输出」注入用户消息前缀。
-        _cmd_abort()
-        _cmd_hist = _take_cmd_transcript()
-        parts = [user_input]
-        if _cmd_hist:
-            parts.insert(0, _cmd_hist)
-        log(f"[{_ts()}] 用户：{user_input}")
-
-        # ---- 1) 文件 / 目录 ----
-        image_blocks = []          # 本轮收集到的图片块（无文件时保持空）
-        file_paths, recursive = file_tools.extract_file_refs(user_input)
-        if file_paths:
-            mode = "递归" if recursive else "一层"
-            _status_mirror(paint(
-                f"  📂 检测到 [detected] {len(file_paths)} 个路径 [{mode}]，"
-                f"正在读取 [reading]...", BB, ITAL))
-            block, ok_list, err_list, image_blocks = file_tools.load_files(
-                file_paths, recursive=recursive)
-            for p in ok_list:
-                _status_mirror(paint(f"  📄 已读取 [read]：{p}", BG))
-            for p, err in err_list:
-                # 失败留在主窗口：你需要知道文件没读进来
-                print(paint(f"  ⚠️  读取失败 [read failed] {p}：{err}", BR, BOLD))
-            if ok_list:
-                parts.append(block)
-
-        # ---- 2) 联网 ----
-        should_search = False
-        search_query = None
-        search_mode = None
-        search_urls = None
-        if force_search:
-            should_search = True
-        elif net_tools.NET_MODE == "on":
-            should_search = True
-        elif net_tools.NET_MODE == "ai":
-            # 🤖 第二位 AI 判定：要不要联网 + 用 search 还是 extract
-            #    （若用户已用 /tavily 锁定模式，net_tools 会优先尊重它）
-            _wspin = _wait_start("判断是否需要联网")
-            try:
-                jv = verify_tools.judge_search(user_input, _recent_context(messages))
-            except BaseException as _wexc:
-                _wait_stop(_wspin, ok=False, label="联网判断失败",
-                           note=type(_wexc).__name__)
-                raise
-            _wait_stop(_wspin, ok=True, label="联网判断完成")
-            _print_search_judge_line(jv)
-            if jv.get("failed"):
-                should_search = net_tools.need_search(user_input)
-                if should_search:
-                    _status_mirror(paint("  🌐 核验异常 → 回退关键词规则：需要联网", BY, DIM))
-            else:
-                should_search = bool(jv.get("need_search"))
-                search_mode = jv.get("mode") or None
-                search_query = jv.get("query") or None
-                search_urls = jv.get("urls") or None
-        elif net_tools.NET_MODE == "auto":
-            should_search = net_tools.need_search(user_input)
-
-        if should_search:
-            _status_mirror(paint("  🌐 正在联网 [connecting]...", BB, ITAL))
-            _eff_mode = net_tools.TAVILY_MODE if net_tools.TAVILY_MODE in ("search", "extract") \
-                else (search_mode or net_tools.TAVILY_MODE)
-            if _eff_mode == "extract":
-                _us = search_urls or net_tools.extract_urls(user_input)
-                _status_mirror(paint(
-                    f"     📄 模式=extract（抓取正文 {len(_us)} 个 URL）", BB, DIM))
-            else:
-                if search_query and search_query != user_input:
-                    _status_mirror(paint(
-                        f"     🔎 模式=search ｜ 检索词（已核验改写）：{search_query}", BB, DIM))
-                else:
-                    _status_mirror(paint(f"     🔎 模式=search", BB, DIM))
-            parts.append("【联网结果】\n" + net_tools.do_network(
-                user_input, query=search_query, mode=search_mode, urls=search_urls))
-
-        content = file_tools.build_content("\n\n".join(parts), image_blocks)
-        messages.append({"role": "user", "content": content})
-        messages = trim_history(messages, MAX_HISTORY)
-
-        # ---- 3) 调用模型（支持工作台工具循环）----
-        _verify_retry = 0          # 双人核验：本轮退回次数清零（仅 revise 计）
-        _verify_suppl = 0          # 双人核验：本轮「补充资料」轮数清零（不计退回）
-        for _round in range(MAX_TOOL_ROUNDS):
-            # 发送前兜底清洗，杜绝 "tool must follow tool_calls" 报错
-            messages = _sanitize_messages(messages)
-            # 等待动画：模型思考期间原地转圈 + 计时，一眼分辨「在跑」还是卡死
-            _wspin = _wait_start("等待模型响应")
-            try:
-                resp = _fc_call(  # [STREAM-PATCH v1]
-                    client, MODEL, messages,
-                    temperature=0.7, max_tokens=MAX_REPLY_TOKENS,
-                    timeout=API_TIMEOUT, tools=workspace.TOOL_SCHEMAS,
-                    spin=_wspin,
-                    # 最终答复要送去复核时不能流式：得先拿到全量文本
-                    verifier_guard=(VERIFY_FINAL_ANSWER
-                                    and verify_tools.is_enabled()),
-                )
-            except BaseException as _wexc:
-                _wait_stop(_wspin, ok=False, label="模型请求失败",
-                           note=type(_wexc).__name__)
-                raise
-            if not _fc_spin_done(_wspin):  # [STREAM-PATCH v1]
-                _wait_stop(_wspin, ok=True, label="模型已响应")
-            choice = resp.choices[0]
-            msg = choice.message
-
-            # 无工具调用 → 正常回复，结束循环
-            if not getattr(msg, "tool_calls", None):
-                if choice.finish_reason == "length":
-                    print(paint("  ⚠️  回复被 max_tokens 截断，代码可能不完整 [reply truncated, code may be incomplete]！", BR, BOLD))
-                reply = msg.content or ""
-
-                # ---- 双人核验：最终答复复核（可选，默认关，/verify answer on 开启）----
-                _vf_ans_free = _verify_suppl < VERIFY_MAX_SUPPLEMENTS
-                if VERIFY_FINAL_ANSWER and verify_tools.is_enabled() \
-                        and (_verify_retry < VERIFY_MAX_RETRIES or _vf_ans_free):
-                    _wspin = _wait_start("复核最终答复")
-                    try:
-                        vres = verify_tools.review_answer(
-                            reply,
-                            user_goal=_last_user_text(messages),
-                            context_text=_recent_context(messages),
-                        )
-                    except BaseException as _wexc:
-                        _wait_stop(_wspin, ok=False, label="答复复核失败",
-                                   note=type(_wexc).__name__)
-                        raise
-                    _wait_stop(_wspin, ok=True, label="答复复核完成")
-                    _print_verify_line(vres, tag="答复核验")
-                    if vres.get("blocked"):
-                        # 需求：仅「要求补充资料」（supplement）不计退回次数，只计补充轮数
-                        _vf_suppl_mode = ((vres.get("verdict") or "").strip().lower()
-                                          == "supplement" and _vf_ans_free)
-                        if _vf_suppl_mode:
-                            _verify_suppl += 1
-                            _vf_ans_tag = (f"要求补充/改写答复（不计退回次数，"
-                                           f"补充轮 {_verify_suppl}/{VERIFY_MAX_SUPPLEMENTS}）")
-                        else:
-                            _verify_retry += 1
-                            _vf_ans_tag = f"（第 {_verify_retry}/{VERIFY_MAX_RETRIES} 次）"
-                        print(paint(f"  🔁 审查员{_vf_ans_tag}", BY, BOLD))
-                        log(f"[{_ts()}] 答复核验打回：{vres.get('reason')}"
-                            f"（suppl={_verify_suppl}/{VERIFY_MAX_SUPPLEMENTS}，"
-                            f"retry={_verify_retry}/{VERIFY_MAX_RETRIES}）")
-                        verify_tools.mirror("-" * 60)
-                        verify_tools.mirror(f"[{_ts()}] 🔁 双人核验·答复被打回（{_vf_ans_tag}）")
-                        verify_tools.mirror(f"    理由：{vres.get('reason', '')}")
-                        messages.append({"role": "assistant", "content": reply})
-                        messages.append({"role": "user",
-                                         "content": verify_tools.feedback_text(vres, kind="answer")})
-                        continue
-
-                if _fc_take_printed():  # [STREAM-PATCH v1]
-                    _fc_finish_answer()   # 正文已实时上屏，只补收尾横线
-                else:
-                    print_ai(reply)       # 回退路径：照旧整段渲染
-                try:
-                    _qq_relay(reply)          # [QQMODE-INPROC v1]
-                except Exception:
-                    pass
-                _win_push_ai(reply)  # [WINDOW-PATCH v1]
-                log(f"[{_ts()}] AI：{strip_markup(reply)}")
-                messages.append({"role": "assistant", "content": reply})
-
-                saved_files = save_code_files(reply)
-                if saved_files:
-                    _proc_line(paint(f"  💾 已保存 [saved] {len(saved_files)} 个代码文件 [code files] 到 [to] {CODE_DIR}/",
-                                     BG, BOLD))
-                    for p in saved_files:
-                        _proc_line(paint(f"     • {p}", BC))
-                break
-
-            # 有工具调用 → 执行并回填
-            messages.append({
-                "role": "assistant",
-                "content": msg.content or "",
-                "tool_calls": [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments,
-                        },
-                    } for tc in msg.tool_calls
-                ],
-            })
-
-            # 解析本轮所有工具调用
-            parsed_calls = []
-            for tc in msg.tool_calls:
-                name = tc.function.name
-                try:
-                    args = json.loads(tc.function.arguments or "{}")
-                except json.JSONDecodeError:
-                    args = {}
-                parsed_calls.append((tc, name, args))
-
-            # ---- 双人核验：把有副作用的动作先交给第二位 AI（审查员）复核 ----
-            v_picks = verify_tools.pick_actions(parsed_calls)
-            # 省 token：静态判定为只读的 ws_run_python 跳过 AI 核验（默认拒绝式判定，
-            #   拿不准就照常送审）。豁免的只是「第二意见」，人工报批照旧生效。
-            #   仅在 auto 模式生效；verify_mode=all（铁壁模式）时一切照旧全审。
-            if v_picks and VERIFY_READONLY_PYTHON and verify_tools.MODE == "auto":
-                _ro_kept = []
-                for _pick in v_picks:
-                    if _pick[1] == "ws_run_python":
-                        _ro_code = (_pick[2] or {}).get("code", "") or ""
-                        _is_ro, _ro_why = _python_is_readonly(_ro_code)
-                        if _is_ro:
-                            log(f"[{_ts()}] 只读 Python 免 AI 核验（静态判定通过，"
-                                f"{len(_ro_code)} 字符；人工报批仍生效）")
-                            continue
-                    _ro_kept.append(_pick)
-                v_picks = _ro_kept
-            if v_picks:
-                _status_mirror(paint(
-                    f"  🧿 双人核验中 [verifying] {len(v_picks)} 个动作"
-                    f"（审查员 [verifier]：{verify_tools.MODEL}）…", BM, BOLD))
-                _wspin = _wait_start("双人核验中")
-                try:
-                    _v_attempt = _verify_retry + _verify_suppl + 1
-                    vres = verify_tools.review(
-                        [(n, a) for (_i, n, a) in v_picks],
-                        user_goal=_last_user_text(messages),
-                        ai_plan=msg.content or "",
-                        context_text=_recent_context(messages),
-                        user_events=_recent_user_events(),
-                        extra_note=(
-                            f"当前工作台根：{workspace.get_workspace()}\n"
-                            f"本轮第 {_v_attempt} 次送审"
-                            + ("（此前已送审过同一动作，请先核对你的上一条要求"
-                               "是否已被满足，不要另提无关的新要求）"
-                               if _v_attempt > 1 else "")
-                            # 如实说明（按档位分述）：被一键放行覆盖的动作没有人工确认了。
-                            # ★ 2026-09-19：范围=all 时删除 / 执行也会被放行，必须让审查员
-                            #   明确知道自己对这一批已无人类兜底（如实告知，不夸大也不隐瞒）。
-                            + ("\n⚠️ 本轮已开启「一键放行」（范围：" + AUTO_APPROVE_SCOPE + "）："
-                               + {"all": "**含删除 / 执行命令 / 执行代码在内**"
-                                         "（仅敏感文件除外）都会自动放行，"
-                                         "本批不存在任何逐批人工确认",
-                                  "writes": "覆盖内容写入（写 / 追加 / 替换），"
-                                            "删除 / 执行类仍会逐批人工确认",
-                                  "none": "实际不覆盖任何动作（等于回到逐批确认）",
-                                  }.get(AUTO_APPROVE_SCOPE, "覆盖范围见档位说明")
-                               + "。对这些动作，你是唯一的外部复核 —— "
-                                 "请按原本标准从严把关，"
-                                 "不要因「用户已表示信任」而放宽。"
-                               if _AUTO_APPROVE_TURN else "")
-                        ),
-                    )
-                except BaseException as _wexc:
-                    _wait_stop(_wspin, ok=False, label="核验失败",
-                               note=type(_wexc).__name__)
-                    raise
-                _wait_stop(_wspin, ok=True, label="核验完成")
-                _print_verify_line(vres)
-                if vres.get("blocked"):
-                    # ★ 需求：「要求补充资料」（supplement）不计入退回次数，只计补充轮数；
-                    #   为防审查员反复索取资料造成死循环，另设免费补充轮数上限
-                    #   VERIFY_MAX_SUPPLEMENTS（用尽后按 revise 计入退回次数）。
-                    _vf_vd = (vres.get("verdict") or "").strip().lower()
-                    _vf_soft = (_vf_vd == "supplement"
-                                and _verify_suppl < VERIFY_MAX_SUPPLEMENTS)
-                    if _vf_soft:
-                        _verify_suppl += 1
-                        _vf_tag = (f"要求补充说明（不计退回次数，"
-                                   f"补充轮 {_verify_suppl}/{VERIFY_MAX_SUPPLEMENTS}）")
-                    elif _verify_retry < VERIFY_MAX_RETRIES:
-                        _verify_retry += 1
-                        _vf_tag = (f"未放行，已打回执行者补充/改方案"
-                                   f"（第 {_verify_retry}/{VERIFY_MAX_RETRIES} 次）")
-                    else:
-                        _vf_tag = ""
-                    if _vf_tag:
-                        # 打回执行者：补充说明或变更方案后重新提交（不执行本批动作）
-                        blocked_idx = {i for (i, _n, _a) in v_picks}
-                        fb = verify_tools.feedback_text(vres)
-                        for i, (tc, name, args) in enumerate(parsed_calls):
-                            content = fb if i in blocked_idx else (
-                                "（同一批次中其他动作的双人核验未通过，本操作一并暂缓执行；"
-                                "待执行者补充说明或变更方案后重新提交核验。）")
-                            messages.append({"role": "tool",
-                                             "tool_call_id": tc.id,
-                                             "content": content})
-                        print(paint(f"  🔁 审查员{_vf_tag}[sent back for revision]", BY, BOLD))
-                        log(f"[{_ts()}] 双人核验打回：{vres.get('reason')}"
-                            f"（suppl={_verify_suppl}/{VERIFY_MAX_SUPPLEMENTS}，"
-                            f"retry={_verify_retry}/{VERIFY_MAX_RETRIES}）")
-                        verify_tools.mirror("-" * 60)
-                        verify_tools.mirror(f"[{_ts()}] 🔁 双人核验·动作被打回，等待执行者"
-                                            f"（{_vf_tag}）")
-                        verify_tools.mirror(f"    理由：{vres.get('reason', '')}")
-                        verify_tools.mirror("    → 本批动作未执行，已把审查意见回填给执行者。")
-                        continue
-                    if VERIFY_STRICT:
-                        # 超过重试上限 + 严格模式 → 整批拦截
-                        fb = verify_tools.feedback_text(vres, final=True)
-                        for tc, name, args in parsed_calls:
-                            messages.append({"role": "tool",
-                                             "tool_call_id": tc.id,
-                                             "content": fb})
-                        print(paint("  🛑 已达双人核验重试上限，动作被拦截 "
-                                    "[verification retry limit reached — blocked]", BR, BOLD))
-                        log(f"[{_ts()}] 双人核验超限拦截：{vres.get('reason')}")
-                        verify_tools.mirror("-" * 60)
-                        verify_tools.mirror(f"[{_ts()}] 🛑 双人核验超限 → 动作被拦截"
-                                            f"（严格模式，全批未执行）")
-                        verify_tools.mirror(f"    理由：{vres.get('reason', '')}")
-                        break
-                    _status_mirror(paint(
-                        "  ⚠️ 已达双人核验重试上限，按宽松模式放行 "
-                        "[retry limit reached — proceeding leniently]", BY, BOLD))
-                    log(f"[{_ts()}] 双人核验超限放行（宽松）：{vres.get('reason')}")
-                    verify_tools.mirror("-" * 60)
-                    verify_tools.mirror(f"[{_ts()}] ⚠️ 双人核验超限 → 宽松模式放行"
-                                        f"（继续走人工报批）")
-                    verify_tools.mirror(f"    理由：{vres.get('reason', '')}")
-
-            # ---- 批量报批：把需要批准的工具调用汇总，问一次 ----
-            #   判定已收敛到 _approval_needed()：写/删/执行必报批；
-            #   ws_read 默认免报批，但命中敏感文件（.env / 密钥 / 凭据）时强制恢复报批。
-            #
-            # ★ 2026-09-19：一键放行**不再覆盖高危动作**（见 _never_auto_approve）。
-            #   否则人工闸门被整体跳过，审查员 AI 会成为事实上的最终裁定者。
-            #   本批需要批准的动作按索引分流：可自动放行的 / 必须亲手确认的。
-            _need = [(i, n, a) for i, (_tc, n, a) in enumerate(parsed_calls)
-                     if _approval_needed(n, a)[0]]
-            approval_reply = None
-            _deny = set()
-            if _need:
-                _auto_i, _must = set(), []
-                for _i, _n, _a in _need:
-                    if _AUTO_APPROVE_TURN and not _never_auto_approve(_n, _a):
-                        _auto_i.add(_i)
-                    else:
-                        _must.append((_i, _n, _a))
-                if _auto_i:
-                    _auto_names = ", ".join(sorted(parsed_calls[_i][1] for _i in _auto_i))
-                    _status_mirror(paint(
-                        f"  🔓 本轮自动放行 {len(_auto_i)} 个内容写入操作（无需再确认）"
-                        f"[auto-approved: {len(_auto_i)} write op(s)]", BB, DIM))
-                    log(f"[{_ts()}] 自动放行 {len(_auto_i)} 个内容写入操作"
-                        f"（scope={AUTO_APPROVE_SCOPE}）：{_auto_names}")
-                if _must:
-                    if _AUTO_APPROVE_TURN:
-                        print(paint(f"  🛡 另有 {len(_must)} 个动作属「永不自动放行」类别"
-                                    f"（删除 / 执行 / 敏感文件），仍需你亲手确认"
-                                    f" [never auto-approved: {len(_must)}]", BR, BOLD))
-                    _ok2, approval_reply = _request_approval(
-                        [(n, a) for (_i, n, a) in _must])
-                    if not _ok2:
-                        _deny = {i for (i, _n, _a) in _must}
-
-            # ---- 逐个执行 ----
-            # 非只读工具执行期间转圈：用**反向帧**（/ | \ -），与「模型思考」的
-            # 正向帧（- \ | /）方向相反 —— 一眼能看出是「机器在跑」而非「模型在想」。
-            # ★ 顺序保证：人工报批（_request_approval 里的 input）已在上方结束，
-            #   此处才起动画，避免动画的 \r 覆盖掉审批提示。
-            # ★ try/finally：异常 / 中断 / 提前跳出都不在屏幕上留残影。
-            _wx = None
-            _wx_ok = True
-            _aborted = False
-            try:
-                for _idx, (tc, name, args) in enumerate(parsed_calls):
-                    if _aborted:
-                        # 本批已被用户中止 → 剩余动作不再执行，但仍回填 tool 消息，
-                        # 保证 assistant(tool_calls) 与 tool 消息数量对齐：
-                        # 否则 _sanitize_messages 会把整组丢弃，模型看不到「已中止」。
-                        ok, result = False, (
-                            "⛔ 本批已被用户中止，该动作未执行。"
-                            "请勿自行重试，先向用户确认是否继续。")
-                    elif _idx in _deny:
-                        # 用户拒绝 → 不执行，回填拒绝说明
-                        ok, result = False, approval_reply
-                    else:
-                        if name not in READ_ONLY_TOOLS:
-                            _lbl = _exec_wait_label(name, args)
-                            if _wx is None:
-                                _wx = _wait_start(_lbl, frames=WAIT_FRAMES_REV,
-                                                  start_delay=WAIT_ANIM_DELAY,
-                                                  detail=exec_tools.progress_hint)
-                            else:
-                                _wx.label_to(_lbl)
-                        ok, result = workspace.call_tool(name, args)
-                        if not ok:
-                            _wx_ok = False
-                        if exec_tools.LAST_ABORTED:
-                            # 路径 A（主窗口 Ctrl+C）/ C（监控器按 K）：用户中止
-                            _aborted = True
-                            _wx_ok = False
-                    icon = "✅" if ok else "⚠️"
-                    color = BG if ok else BR
-                    first = result.splitlines()[0][:100] if result else ""
-                    # 成功 → 状态台；**失败仍留在主窗口**（不让你漏掉异常）
-                    _proc_line(paint(
-                        f"  {icon} 工作台 [workspace] {name} → {first}", color),
-                        keep_in_main=not ok)
-                    log(f"[{_ts()}] TOOL {name}({args}) -> {result}")
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": result,
-                    })
-            finally:
-                _wait_stop(_wx, ok=_wx_ok,
-                           label="已中止" if _aborted else
-                                 ("执行完成" if _wx_ok else "执行完成（有失败项）"))
-                if _aborted:
-                    print(paint("  ⛔ 已按你的指令中止本批执行 [aborted by user]"
-                                "｜剩余动作未运行，已把中止情况回填给模型", BR, BOLD))
-                    log(f"[{_ts()}] 用户中止执行：本批剩余动作未运行")
-        else:
-            print(paint("  ⚠️  工具调用轮次达到上限，已强制停止 [tool-call round limit reached, stopped]", BY, BOLD))
-
-    except KeyboardInterrupt:
-        _TIMER_EXITING = True
-        _quit_clean = True            # [QUIT-CLEAN v1] Ctrl+C 也算主动退出
-        print("\n" + rainbow("  ✨ 已退出，下次见 [Exited, see you] ✨  "))
-        _sig = ui_core.signature()
-        if _sig:
-            print(ui_core.paint("  ✎ " + _sig, ui_core.BK, ui_core.ITAL))
-        log(f"[{_ts()}] === 用户中断 ===")
-        break
-    except EOFError:
-        # ★ stdin 已关闭（管道读完 / 输入被重定向耗尽 / 窗口被关）。
-        #   没有输入源了 —— 必须在这里退出！
-        #   否则会落进下面的 `except Exception`，每轮重试一次 input()，
-        #   表现为「每 3 秒刷一条错误、程序永不结束」的假死循环。
-        _TIMER_EXITING = True
-        print()
-        print(paint("  📪 输入已结束 [stdin closed]，程序退出 [exiting]", BY, BOLD))
-        log(f"[{_ts()}] === stdin 关闭，退出 ===")
-        break
-    except Exception as e:
-        print(paint(f"  ❌ 出错了 [error]：{e}", BR, BOLD))
-        # ---- 防刷屏：同一个错误连续出现时降频 ----
-        # 若错误发生在本轮「取输入之前」（例如某处未定义、环境异常），
-        # 主循环会立刻回头再撞一次 —— 那是 100% CPU 的无限刷屏。
-        # 这里前 5 次照常打印，之后每 3 秒才提示一次并累计次数，
-        # 既不掩盖问题，也不把终端和 CPU 烧穿。
-        _esig = "%s: %s" % (type(e).__name__, e)
-        if _esig == _last_err_sig:
-            _err_streak += 1
-        else:
-            _last_err_sig, _err_streak = _esig, 1
-        if _err_streak >= 5:
-            if _err_streak == 5 or _err_streak % 10 == 0:
-                print(paint(
-                    f"  ⚠️ 同一错误已连续出现 {_err_streak} 次，已降频到每 3 秒提示一次"
-                    f"（按 Ctrl+C 可退出；修复后重启即可）", BY, DIM))
-            time.sleep(3)
-    finally:
-        # 无论这一轮是正常回复、斜杠命令（continue）、还是异常，
-        # 都在末尾统一结算计时，保证"跑完 → 等你发话"这条线不断。
-        _cmd_finalize()      # 斜杠命令：把「命令 + 输出」暂存，供下次注入给模型
-        _mark_round_end()
+if not _run_gui_first():
+    # 回退路径：老模型（主线程跑 agent 循环，Tk 在 daemon 子线程）
+    _agent_main()
 
 
 # ============================================================

@@ -109,6 +109,12 @@ EMBED = [
     "fatfish_core/setappl.py",    # /set 各 applier
     "fatfish_core/uicolors.py",   # 颜色单一真源
     "fatfish_core/roundtime.py",  # ★ 轮次计时（三处落款共用）
+    # ★ 2026-10-03 P1 新增（编辑器组布局）——
+    #   这两个模块**必须在清单里**：chat_window.py 是 try/except 导入它们的
+    #   （取不到就用降级桩），所以缺文件不会崩，但会**静默降级**成
+    #   "不能分屏 / 不能持久化"的阉割界面 —— 比崩掉更难发现。
+    "fatfish_core/layout.py",     # 编辑器组布局数据模型（纯数据）
+    "fatfish_core/exectail.py",   # exec 子程序输出 tailer
     # ---- 启动脚本 ----
     "fatfish1.2.1.bat",       # 启动器（双击这个）
     "fatfish_runtime.bat",    # 运行窗口
@@ -139,6 +145,8 @@ SELFCHECK_MODULES = [
     "chat_window",            # 对话窗口（2026-10-02 新增）
     "stream_core",            # 流式内核（2026-10-02 新增）
     "fatfish_core",           # 功能包（2026-10-02 拆出；包名，查 __init__.py）
+    "fatfish_core.layout",    # ★ 2026-10-03：编辑器组布局（缺失 → 界面静默降级）
+    "fatfish_core.exectail",  # ★ 2026-10-03：exec 输出 tailer
 ]
 
 MARKER = "##PYBEGIN##"
@@ -519,8 +527,9 @@ def local_py_modules():
 
 
 def _in_embed_module(mod):
-    """mod 是模块名或包名；判断 EMBED 是否已覆盖它。"""
-    return (("%s.py" % mod) in EMBED) or (("%s/__init__.py" % mod) in EMBED)
+    """mod 是模块名 / 包名，**可含点**（如 fatfish_core.layout）；判断 EMBED 是否覆盖它。"""
+    m = str(mod).replace(".", "/")
+    return (("%s.py" % m) in EMBED) or (("%s/__init__.py" % m) in EMBED)
 
 
 def audit_embed():
@@ -562,16 +571,31 @@ def audit_embed():
             problems.append("解析 %s 失败（该文件审计跳过）：%s" % (name, e))
             continue
         need = set()
+        need_full = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for a in node.names:
                     need.add(a.name.split(".")[0])
+                    need_full.add(a.name)
             elif isinstance(node, ast.ImportFrom):
                 if node.module and node.level == 0:
                     need.add(node.module.split(".")[0])
+                    need_full.add(node.module)
         for mod in sorted(need & local):
             if not _in_embed_module(mod):
                 problems.append("%s 依赖本地模块 %s，但它不在 EMBED 中" % (name, mod))
+
+        # ③ ★ 2026-10-03 补：**包内子模块**单独核对。
+        #   只查顶层名有个盲区：`from fatfish_core.layout import ...` 解析出来的
+        #   顶层名是 `fatfish_core`，而 `fatfish_core/__init__.py` 在清单里 ——
+        #   于是"整包已覆盖"，包内新增的模块就**永远查不出来**了。
+        #   （真实案例：layout.py / exectail.py 加进包后，审计照样报"通过"。）
+        for full in sorted(need_full):
+            if "." not in full:
+                continue
+            rel = full.replace(".", "/") + ".py"
+            if os.path.isfile(rel) and rel not in emb:
+                problems.append("%s 依赖本地模块 %s，但它不在 EMBED 中" % (name, rel))
 
     return sorted(set(problems))
 
