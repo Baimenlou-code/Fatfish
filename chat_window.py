@@ -6,7 +6,7 @@ chat_window.py —— 肥鱼「QQ 式」对话窗口 / FatFish Chat Window
 一个独立可跑的 Tkinter 窗口：
 
     ┌──────────────────────────────────────────────────────┐
-    │ 🐟 肥鱼 · 对话     [deepseek-flash]   📎 🖼 📌 🧹     │
+    │ 🐟 肥鱼 · 对话     [deepseek-flash]                   │   ← 顶栏只留标题
     ├──────────────────────────────────────────────────────┤
     │ 对话 │ 日志                                          │   ← 两个页签
     │  ┌────────────┐                                      │
@@ -16,6 +16,8 @@ chat_window.py —— 肥鱼「QQ 式」对话窗口 / FatFish Chat Window
     │                            └────────────┘            │
     ├──────────────────────────────────────────────────────┤
     │ 📎 a.png ✕   📄 notes.md ✕                            │   ← 附件条
+    ├──────────────────────────────────────────────────────┤
+    │ 😊 表情   🧹 📌 🖼 📎                                │   ← 按钮并列一行
     ├──────────────────────────────────────────────────────┤
     │ ┌──────────────────────────────┐  ┌────────┐          │
     │ │ 多行输入框（自动增高）        │  │  发送  │          │
@@ -215,6 +217,24 @@ except Exception:
 #   （旧注释「浅底（白底）可读的深色系」属于白底皮肤时代，已作废并删除。）
 
 MAX_LOG_LINES = 4000          # 日志页最多保留多少行
+
+# ★★ [CONLOG] 2026-10-03：日志页改用「真控制台」渲染（方案1）。
+#   为什么：Tk Text 是**富文本控件** —— wrap="char" 时每个字符都要参与折行
+#   计算，see()/yview() 会强制整块重排。实测「插入 + 裁剪 + see」在 4000 行
+#   面板上要 25 ms/条（1200 行就卡了 30 秒），而这些问题全发生在 Tk 主线程上
+#   → 界面直接冻结。真控制台是固定字符网格：写入只更新格子、滚动只挪视口，
+#   而且渲染跑在 conhost 自己的进程里，Tk 主循环全程空闲。
+#   失败即降级：非 Windows / 宿主起不来 / 任何异常 → 自动退回原 Tk Text，
+#   日志页不会开天窗。FATFISH_LOGCONSOLE=0 可一键关掉。
+try:
+    import conlog as _conlog
+except Exception:                                   # pragma: no cover
+    _conlog = None
+
+_LOG_HOST = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "loghost.py")
+_LOG_CONSOLE = [(os.environ.get("FATFISH_LOGCONSOLE", "1").strip().lower()
+                 not in ("0", "no", "false", "off"))]
 # ★ [P1a] 数据层每个面板的条目上限（环形缓冲）。
 #   视图可随意生灭，数据层是唯一真源；上限防止长时间运行把内存吃满。
 #   比 MAX_LOG_LINES 略大：视图只显示尾部，数据层多留一截便于整体重放。
@@ -230,6 +250,11 @@ _UI_FORCE_CLASSIC = (os.environ.get("FATFISH_UI", "editor").strip().lower() == "
 # 默认布局预设（用户指定：对话为主 + 状态 / 监控在左）
 _DEFAULT_LAYOUT_PRESET = (os.environ.get("FATFISH_UI_PRESET", "focus").strip() or "focus")
 MAX_BUBBLE_TEXT = 200000      # 单个气泡最多多少字符（防手滑喂超大文件）
+# ★ [FIX 2026-10-03] 对话面板也要有行数上限：
+#   以前只有 日志/状态/监控 会裁剪（MAX_LOG_LINES），对话区**只增不减** →
+#   长跑会话下控件无限膨胀。视图只留尾部，数据层仍保留 DATA_CAP 条，
+#   面板重建时由 replay() 补齐，所以裁剪只影响"看得见的最老内容"。
+MAX_CHAT_LINES = 6000         # 对话面板最多保留多少行（视图层）
 
 # ============ 状态条（2026-10-02 新增）============
 #   把原本只画在控制台里的两样东西搬进窗口：
@@ -742,6 +767,84 @@ class DropTarget(object):
         return out
 
 
+# ================================================================ 滚动条（深色自绘）
+# ★★ 2026-10-03：为什么不能再用 tk.Scrollbar ★★
+#   本机实测（Tk 8.6 / Windows）：`tk.Scrollbar` **完全忽略** -background 与
+#   -troughcolor —— 无论怎么配，它都按系统浅色画：
+#         槽 #f0f0f0 ｜ 高光 #ffffff ｜ 描边 #858585
+#   在纯黑界面上，这表现为**每条面板右缘一道刺眼白条**，并且看上去像
+#   「没有为滚动条预留位置」（用户实测反馈：开机后左右都没有留出滚动条的位置）。
+#   逐像素抓屏证据：设定的 bg=#181818 与实画颜色毫无关系。
+#   → 对照实验：换成 ttk.Scrollbar + **clam** 主题后，槽/滑块/箭头/描边
+#     全部按样板上色（lime 槽、blue 描边、yellow 箭头、red 滑块均正确渲染）。
+#   结论：一律用 **ttk.Scrollbar + clam（Tk 自绘引擎，吃样式颜色）**，
+#         并给滚动条留出**明确的一栏**（固定 width + 两侧 2px 留白）。
+SB_THUMB = "#3A3A3A"          # 滑块（常态）
+SB_THUMB_HOT = "#5A5A5A"      # 滑块（悬停 / 拖动中）
+SB_ARROW = "#8A8A8A"          # 上下箭头（「上下翻动的条」的可视标识）
+SB_BORDER = "#181818"         # 滑块描边（与面板同色系，不抢眼）
+SB_WIDTH = 14                 # ★ 明确宽度 —— 滚动条是被"预留"出来的固定一栏
+_SB_READY = set()             # 已配置过的样式名（幂等，只配一次）
+
+#   各面板的「槽色」＝该面板自己的底色，滚动条与面板融为一体、不再是一道白条
+_SB_TROUGH = {
+    "chat": THEME["bg"], "log": THEME["log_bg"],
+    "status": THEME["panel"], "exec": THEME["log_bg"],
+}
+
+
+def _sb_style_for(w, panel):
+    """取（必要时创建）某个面板的深色滚动条样式名，返回样式名。"""
+    name = "FF." + str(panel) + ".Vertical.TScrollbar"
+    if name in _SB_READY:
+        return name
+    try:
+        st = ttk.Style(w)
+        # ★ clam 是 Tk 自绘引擎，**吃样式里的颜色**；
+        #   vista / xpnative 由系统画，改不动（这正是白条的根源）。
+        try:
+            if st.theme_use() != "clam":
+                st.theme_use("clam")
+        except Exception:
+            pass
+        st.configure(name,
+                     troughcolor=_SB_TROUGH.get(panel, THEME["bg"]),
+                     background=SB_THUMB, bordercolor=SB_BORDER,
+                     arrowcolor=SB_ARROW,
+                     darkcolor="#2A2A2A", lightcolor="#4A4A4A",
+                     gripcount=0, width=SB_WIDTH)
+        st.map(name,
+               background=[("pressed", SB_THUMB_HOT), ("active", SB_THUMB_HOT)],
+               arrowcolor=[("active", THEME["text"])])
+    except Exception:
+        pass
+    _SB_READY.add(name)
+    return name
+
+
+def _make_scrollbar(parent, panel, txt, width=None):
+    """造一条与面板配套的深色滚动条，并接好 Text ↔ Scrollbar 双向绑定。
+
+    ★ **必须由调用方先 pack 滚动条、再 pack 文本**：Text 带 fill+expand，
+      先 pack 会把剩余空间全吃掉，滚动条宽度直接归零（实测踩过）。
+    ★ 只造控件、不 pack，交给调用方决定留白（padx）。
+    """
+    try:
+        sb = ttk.Scrollbar(parent, orient="vertical",
+                           style=_sb_style_for(parent, panel),
+                           command=txt.yview)
+    except Exception:
+        # 极端情况（ttk 不可用）退回老控件：功能还在，只是颜色不理想
+        sb = tk.Scrollbar(parent, orient="vertical", command=txt.yview)
+    try:
+        if width:
+            sb.configure(width=width)
+    except Exception:
+        pass
+    txt.configure(yscrollcommand=sb.set)
+    return sb
+
+
 # ================================================================ 窗口
 class ChatWindow(object):
     def __init__(self, title="🐟 肥鱼 · 对话", model="", workspace="",
@@ -812,6 +915,7 @@ class ChatWindow(object):
         self._layout_save_job = None
         self._env_backed = False
         self.texts = {}                  # panel -> 当前可见的 Text
+        self._scrollbars = {}            # ★ panel -> 当前可见的深色滚动条（自测/诊断用）
         self.floats = {}                 # panel -> Toplevel（被拆出去的面板）
         self.exec_text = None            # 「监控」面板正文
         self.exec_painter = None
@@ -833,6 +937,9 @@ class ChatWindow(object):
         self.log = None
         self.log_painter = None
         self.inner = None
+        self._logcon = None              # ★ [CONLOG] 真控制台日志页后端
+        self._log_holder = None          # ★ [CONLOG] 当前承载控制台的容器
+        self._log_fit_job = None         # ★ [CONLOG] resize 合并句柄
 
     # ------------------------------------------------------------ 生命周期
     def start(self):
@@ -908,11 +1015,184 @@ class ChatWindow(object):
                 pass
             self.root = None
 
+    # ------------------------------------------------- ★ [RESTART] 一键重启
+    def _find_launcher(self):
+        """找出启动器 bat：优先 fatfish<版本>.bat，其次 fatfish_runtime.bat。"""
+        try:
+            here = os.path.dirname(os.path.abspath(__file__))
+        except Exception:
+            here = os.getcwd()
+        skip = ("fatfish_runtime.bat", "fatfish_lang.bat")
+        cands = []
+        try:
+            for fn in os.listdir(here):
+                low = fn.lower()
+                if (low.startswith("fatfish") and low.endswith(".bat")
+                        and low not in skip):
+                    cands.append(os.path.join(here, fn))
+        except Exception:
+            pass
+        cands.sort()
+        if cands:
+            return cands[-1]
+        p = os.path.join(here, "fatfish_runtime.bat")
+        return p if os.path.isfile(p) else None
+
+    def restart_app(self, confirm=True):
+        """★ [RESTART] 一键重启：拉一个「等本进程退出后才启动器」的助手，然后自己干净退出。
+
+        时序：
+            点按钮 → 写助手 .cmd → 剥离启动助手（无窗口）
+                  → 助手轮询本进程 PID，直到它消失 → 才 start 启动器
+                  → 本进程 _on_close() 干净收尾（含日志宿主）
+
+        为什么不用 `timeout`：助手是 CREATE_NO_WINDOW 起的，拿不到控制台，
+        `timeout` 会直接报「输入重定向错误」；`ping -n 2 127.0.0.1` 不需要控制台。
+        """
+        here = os.path.dirname(os.path.abspath(__file__))
+        bat = self._find_launcher()
+        if not bat:
+            try:
+                from tkinter import messagebox
+                messagebox.showwarning("重启",
+                                       "找不到启动器（fatfish*.bat），无法自动重启。",
+                                       parent=self.root)
+            except Exception:
+                pass
+            return False
+        if confirm:
+            try:
+                from tkinter import messagebox
+                if not messagebox.askyesno(
+                        "重启肥鱼",
+                        "确定要重启吗？\n\n"
+                        "· 当前窗口会关闭\n"
+                        "· 约 2 秒后自动重新启动\n"
+                        "· 输入框里未发送的内容会丢失",
+                        parent=self.root):
+                    return False
+            except Exception:
+                pass
+        _HELPER = r'''# -*- coding: utf-8 -*-
+"""等父进程退出 -> 再拉起启动器（由 chat_window.restart_app 生成的一次性脚本）。
+
+为什么要等：直接 restart 会让新旧两个实例有一段时间**重叠** —— 它们会同时
+去写 _fatfish_pid.txt、抢同一个输出流、各拉一个日志宿主控制台。实测这类
+重叠最容易表现成「两个窗口」或「新的起来了但没反应」。所以这里用
+OpenProcess + WaitForSingleObject 精确等父进程真的退出。
+
+为什么不用批处理：.cmd 版助手踩过三个坑 —— ① 文本模式写入把 \r\n 变成
+\r\r\n，多出来的 CR 让 cmd 认不出 :wait 标签；② tasklist | find 的
+errorlevel 语义在中文 codepage 下不可靠；③ 实测助手会卡死在等待循环里。
+Python 版没有这些雷。
+"""
+import os
+import sys
+import time
+import ctypes
+import subprocess
+
+_SYNCHRONIZE = 0x00100000
+_WAIT_OBJECT_0 = 0
+_MAX_WAIT = 120.0
+_DETACHED = 0x00000008
+_NO_WINDOW = 0x08000000
+
+
+def _alive(pid):
+    """进程是否仍在运行（拿不到句柄 = 已经退出）。"""
+    try:
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        # ★ 必须显式声明：64 位下默认 restype=c_int 会把句柄截断，
+        #   OpenProcess 于是"永远失败" -> 助手会立刻拉起启动器（等于没等）。
+        k32.OpenProcess.restype = ctypes.c_void_p
+        k32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+        k32.WaitForSingleObject.restype = ctypes.c_uint32
+        k32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+        k32.CloseHandle.argtypes = [ctypes.c_void_p]
+        h = k32.OpenProcess(_SYNCHRONIZE, 0, int(pid))
+        if not h:
+            return False
+        try:
+            return k32.WaitForSingleObject(h, 0) != _WAIT_OBJECT_0
+        finally:
+            try:
+                k32.CloseHandle(h)
+            except Exception:
+                pass
+    except Exception:
+        return False
+
+
+def main():
+    try:
+        pid = int(sys.argv[1])
+        bat = sys.argv[2]
+    except Exception:
+        return 1
+    t0 = time.time()
+    while (time.time() - t0) < _MAX_WAIT and _alive(pid):
+        time.sleep(0.2)
+    time.sleep(0.6)                      # 再稳一下：等文件句柄 / 控制台松掉
+    try:
+        os.startfile(bat)                # ShellExecute：.bat 自己开新窗口
+        return 0
+    except Exception:
+        pass
+    try:
+        subprocess.Popen(["cmd", "/c", "start", "", bat],
+                         creationflags=_DETACHED | _NO_WINDOW,
+                         close_fds=True)
+        return 0
+    except Exception:
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+'''
+        tmp = os.path.join(here, ".fatfish_tmp")
+        try:
+            os.makedirs(tmp, exist_ok=True)
+        except Exception:
+            pass
+        helper = os.path.join(tmp, "_restart_helper.py")
+        try:
+            # ★ 二进制写：文本模式会把 body 里已有的 \r\n 再翻一遍
+            #   （\r\n -> \r\r\n），多出来的 CR 曾把 .cmd 版助手整废。
+            with open(helper, "wb") as f:
+                f.write(_HELPER.encode("utf-8"))
+        except Exception:
+            return False
+        try:
+            import subprocess
+            DETACHED = 0x00000008        # 与父进程脱钩：我们先退，它继续活着
+            NO_WINDOW = 0x08000000       # 助手自己不弹窗
+            subprocess.Popen([sys.executable, helper, str(os.getpid()), bat],
+                             cwd=here,
+                             creationflags=DETACHED | NO_WINDOW,
+                             stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL,
+                             close_fds=True)
+        except Exception:
+            return False
+        try:
+            self._on_close()             # 干净收尾（顺带收掉日志宿主控制台）
+        except Exception:
+            pass
+        return True
+
     def _on_close(self):
         self.alive = False
         self._stop_hover_watch()          # ★ 先停定时回调，再销毁窗口
         self._stop_exec_tail()            # ★ [P1c]
         self._stop_layout_save()          # ★ [P1d]
+        try:
+            if getattr(self, "_logcon", None) is not None:
+                self._logcon.close()      # ★ [CONLOG] 收掉日志宿主进程
+        except Exception:
+            pass
         try:
             if self.drop is not None:
                 self.drop.restore()
@@ -951,7 +1231,7 @@ class ChatWindow(object):
                 pass
 
         # ---- 顶栏 ----
-        top = tk.Frame(r, bg=THEME["panel"], height=44)
+        top = tk.Frame(r, bg=THEME["panel"], height=30)
         top.pack(fill="x", side="top")
         top.pack_propagate(False)
         tk.Label(top, text=self.title, bg=THEME["panel"], fg=THEME["text"],
@@ -960,17 +1240,8 @@ class ChatWindow(object):
                                   bg=THEME["panel"], fg=THEME["accent"],
                                   font=FONT_UI_S)
         self.lbl_model.pack(side="left", padx=6)
-        for text, cmd, tip in (("🧹", self.clear_bubbles, "清空对话"),
-                               ("📌", self.toggle_top, "置顶"),
-                               ("🖼", self.add_clipboard_image, "粘贴剪贴板里的图片"),
-                               ("📎", self.pick_files, "选择文件")):
-            # 古早风：凸起按钮（relief=raised + 1px 边），不用扁平化
-            b = tk.Button(top, text=text, command=cmd, bg=THEME["btn"],
-                          fg=THEME["text"], font=FONT_UI, relief="raised",
-                          activebackground=THEME["btn_hot"],
-                          activeforeground=THEME["text"], bd=1,
-                          padx=6, pady=0)
-            b.pack(side="right", padx=3, pady=8)
+        # ★ [UI-COMPACT] 原先挂在这儿的「清空 / 置顶 / 贴图 / 选文件」四个按钮
+        #   已**下移**到输入区工具栏，与表情按钮并列一行；顶栏只留标题与模型名。
 
         # ---- ★ [P1b] 布局区：编辑器组式（VS Code 风格）/ 经典页签 ----
         #   classic → 原两页签（对话 / 日志），FATFISH_UI=classic 时启用
@@ -1012,18 +1283,31 @@ class ChatWindow(object):
                                   anchor="e")
         self._lbl_spin.pack(side="right")
 
-        # ---- 工具栏（古早 QQ 风：表情按钮）----
+        # ---- 工具栏（古早 QQ 风：表情 + 附件等按钮**并列一行**）----
         bar = tk.Frame(bottom, bg=THEME["panel"])
-        bar.pack(fill="x", side="top", padx=10, pady=(6, 0))
+        bar.pack(fill="x", side="top", padx=10, pady=(4, 0))
         tk.Button(bar, text="😊", command=self._toggle_emoji_panel,
                   bg=THEME["btn"], fg=THEME["text"], font=FONT_UI,
                   relief="raised", bd=1, padx=6, pady=1,
                   activebackground=THEME["btn_hot"]).pack(side="left")
         tk.Label(bar, text="表情", bg=THEME["panel"], fg=THEME["text_dim"],
-                 font=FONT_UI_S).pack(side="left", padx=(4, 12))
+                 font=FONT_UI_S).pack(side="left", padx=(4, 10))
+        # ★ [UI-COMPACT] 原顶栏四个按钮下移到这里，与表情并列
+        for text, cmd, tip in (("🧹", self.clear_bubbles, "清空对话"),
+                               ("📌", self.toggle_top, "置顶"),
+                               ("🖼", self.add_clipboard_image, "粘贴剪贴板里的图片"),
+                               ("📎", self.pick_files, "选择文件"),
+                               ("↻", self.restart_app, "重启肥鱼")):
+            # 古早风：凸起按钮（relief=raised + 1px 边），不用扁平化
+            b = tk.Button(bar, text=text, command=cmd, bg=THEME["btn"],
+                          fg=THEME["text"], font=FONT_UI, relief="raised",
+                          activebackground=THEME["btn_hot"],
+                          activeforeground=THEME["text"], bd=1,
+                          padx=6, pady=0)
+            b.pack(side="left", padx=2)
         tk.Label(bar, text="（也可直接打 [表情:fish_ok]；肥鱼回复里的表情会显示成图）",
                  bg=THEME["panel"], fg=THEME["text_dim"],
-                 font=FONT_UI_S).pack(side="left")
+                 font=FONT_UI_S).pack(side="left", padx=(8, 0))
         wrap = tk.Frame(bottom, bg=THEME["panel"])
         wrap.pack(fill="x", padx=10, pady=(8, 4))
         self._input_wrap = wrap              # 表情框要插在这一行之前
@@ -1110,11 +1394,10 @@ class ChatWindow(object):
                             highlightthickness=0, padx=10, pady=6,
                             insertbackground=THEME["text"],
                             cursor="arrow", state="disabled")
-        csb = tk.Scrollbar(page1, orient="vertical", command=self.chat.yview,
-                           bg=THEME["panel"], troughcolor=THEME["bg"],
-                           bd=0, relief="flat")
-        self.chat.configure(yscrollcommand=csb.set)
-        csb.pack(side="right", fill="y")
+        # ★ 深色滚动条：tk.Scrollbar 在本机画不出颜色（见 _sb_style_for 顶部注释）
+        csb = _make_scrollbar(page1, "chat", self.chat)
+        self._scrollbars["chat"] = csb
+        csb.pack(side="right", fill="y", padx=(2, 2))
         self.chat.pack(side="left", fill="both", expand=True)
         # ★ 只读：放行滚动/复制键，拦掉一切编辑键
         self.chat.bind("<Key>", self._chat_key)
@@ -1124,20 +1407,25 @@ class ChatWindow(object):
         self.inner = self.chat        # 兼容旧的 self.inner 引用点
 
         # 日志页
-        self.log = tk.Text(page2, bg=THEME["log_bg"], fg=THEME["log_text"],
-                           font=FONT_MONO, wrap="word", bd=0,
-                           insertbackground=THEME["text"], state="normal")
-        lsb = tk.Scrollbar(page2, orient="vertical", command=self.log.yview,
-                           bg=THEME["panel"], troughcolor=THEME["log_bg"],
-                           bd=0, relief="flat")
-        self.log.configure(yscrollcommand=lsb.set)
-        lsb.pack(side="right", fill="y")
-        self.log.pack(side="left", fill="both", expand=True)
-        self.log_painter = AnsiPainter(self.log, FONT_MONO, "log")
+        _clh = self._make_log_console(page2)     # ★ [CONLOG] 优先真控制台
+        if _clh is not None:
+            self.log = _clh
+            self.log_painter = None
+        else:
+            self.log = tk.Text(page2, bg=THEME["log_bg"], fg=THEME["log_text"],
+                               font=FONT_MONO, wrap="word", bd=0,
+                               insertbackground=THEME["text"], state="normal")
+            # ★ 深色滚动条（同上）
+            lsb = _make_scrollbar(page2, "log", self.log)
+            self._scrollbars["log"] = lsb
+            lsb.pack(side="right", fill="y", padx=(2, 2))
+            self.log.pack(side="left", fill="both", expand=True)
+            self.log_painter = AnsiPainter(self.log, FONT_MONO, "log")
         self.texts = {"chat": self.chat, "log": self.log}
         # ★ [P1c] 经典模式同样要登记 painter —— _paint_plain 是按
         #   (texts, painters) 成对取用的，漏了这里日志面板就不会渲染了。
-        self.painters = {"log": self.log_painter}
+        self.painters = ({} if self.log_painter is None
+                         else {"log": self.log_painter})
         self._tagged.clear()
 
     def _build_editor(self, r):
@@ -1174,9 +1462,20 @@ class ChatWindow(object):
             return
         if getattr(self, "_busy", False):
             return
+        # ★★ [STREAM-KEEP v2] 2026-10-03：重建会销毁当前所有 Text 控件。
+        #   流式正文此刻已**实时写进数据层**（可变 item），所以不再需要"捞原文回灌"：
+        #   重建后 replay() 会把半截内容原样渲染回新控件，并由 _bubble_meta()
+        #   自动把 painter 重绑到新控件上，后续增量无缝续写。
+        #   这里只做一件事：断开旧 painter / body 与即将销毁控件的绑定。
+        if self._stream is not None:
+            self._stream["painter"] = None
+            self._stream["body"] = None
+            self._stream["fit_pending"] = False
         self._busy = True
         try:
+            self._logcon_detach()            # ★ [CONLOG] 先摘出控制台再销毁控件
             self.texts.clear()
+            self._scrollbars.clear()         # ★ 滚动条随视图一起销毁重建
             self.chat = None
             self.log = None
             self.log_painter = None
@@ -1198,6 +1497,9 @@ class ChatWindow(object):
             self._schedule_layout_save()      # ★ [P1d] 布局变了 → 延后写回 .env
         finally:
             self._busy = False
+        # ★ [STREAM-KEEP v2] 不再回灌全文 —— 数据层已是唯一真源：
+        #   _make_panel_text() → replay() 已把（含正在流式的）内容重放完毕，
+        #   并把 st["painter"] 重绑到新控件；这里无需任何补救动作。
 
     def _node(self, parent, node):
         if node[0] == "group":
@@ -1276,6 +1578,118 @@ class ChatWindow(object):
                  bg=THEME["bg"], fg=THEME["text_dim"], justify="center",
                  font=FONT_UI_S).pack(expand=True)
 
+    # ------------------------------------------------- ★ [CONLOG] 真控制台日志页
+    def _logcon_wanted(self):
+        """是否启用「真控制台」日志页（FATFISH_LOGCONSOLE=0 可关掉）。"""
+        try:
+            return bool(_LOG_CONSOLE[0] and _conlog is not None
+                        and getattr(_conlog, "IS_WIN", False))
+        except Exception:
+            return False
+
+    def _logcon_ensure(self):
+        """确保控制台宿主已启动；返回 ConsoleLog 或 None。"""
+        if not self._logcon_wanted():
+            return None
+        cl = self._logcon
+        if cl is not None and cl.alive():
+            return cl
+        try:
+            if cl is not None:
+                cl.close()
+        except Exception:
+            pass
+        self._logcon = None
+        try:
+            cl = _conlog.ConsoleLog(_LOG_HOST,
+                                    title="FATFISH_LOGHOST_%d" % os.getpid())
+            if cl.start():
+                self._logcon = cl
+                return cl
+        except Exception:
+            pass
+        return None
+
+    def _logcon_detach(self):
+        """控件即将销毁 → 先把控制台摘出来。
+
+        ★ 必须在父窗口 destroy **之前**做完：控制台窗口是它的 Win32 子窗口，
+          父窗口一炸，控制台会跟着一起没（连同真实控制台里的历史）。
+        """
+        cl = getattr(self, "_logcon", None)
+        if cl is None:
+            return
+        try:
+            if getattr(cl, "attached", False):
+                cl.detach()
+        except Exception:
+            pass
+
+    def _logcon_fit_later(self, holder):
+        """容器 resize → 合并成一次 MoveWindow（拖边框时别疯狂调）。"""
+        self._log_holder = holder
+        if getattr(self, "_log_fit_job", None) is not None:
+            return
+        try:
+            self._log_fit_job = self.root.after(30, self._logcon_fit_now)
+        except Exception:
+            self._log_fit_job = None
+
+    def _logcon_fit_now(self):
+        self._log_fit_job = None
+        cl = getattr(self, "_logcon", None)
+        h = getattr(self, "_log_holder", None)
+        if cl is None or h is None or not getattr(cl, "attached", False):
+            return
+        try:
+            cl.fit(h)
+        except Exception:
+            pass
+
+    def _make_log_console(self, parent):
+        """给日志面板建「真控制台」视图；成功返回容器，失败返回 None（调用方退回 Text）。
+
+        ★ 控制台自带历史与滚动条，且重建时窗口本身不被销毁
+          → 这一条路径**不需要 replay**，切标签 / 拖布局都一行不丢。
+          只有「宿主是新起的」才把数据层灌回去补历史。
+        """
+        if not self._logcon_wanted():
+            return None
+        st = self._panel_style("log")
+        holder = tk.Frame(parent, bg=st["bg"])
+        holder.pack(side="left", fill="both", expand=True)
+        fresh = self._logcon is None or not self._logcon.alive()
+        cl = self._logcon_ensure()
+        if cl is None:
+            try:
+                holder.destroy()
+            except Exception:
+                pass
+            return None
+        self._log_holder = holder
+        try:
+            holder.bind("<Configure>",
+                        lambda e, h=holder: self._logcon_fit_later(h))
+        except Exception:
+            pass
+        try:
+            holder.update_idletasks()       # 先让 Tk 算完几何，否则尺寸是 1x1
+        except Exception:
+            pass
+        if not cl.attach(holder):
+            try:
+                holder.destroy()
+            except Exception:
+                pass
+            return None
+        if fresh:
+            try:                                # 新宿主：把数据层历史补回去
+                for _it in (self.data.get("log") or []):
+                    cl.write(_it)
+            except Exception:
+                pass
+        return holder
+
     def _make_panel_text(self, parent, panel):
         """给一个面板建 Text + 滚动条，登记别名，并从数据层重放内容。
 
@@ -1283,6 +1697,13 @@ class ChatWindow(object):
           数据层里的内容原样回到新控件上。
         """
         st = self._panel_style(panel)
+        if panel == "log":                  # ★ [CONLOG] 日志页优先用真控制台
+            _holder = self._make_log_console(parent)
+            if _holder is not None:
+                self.texts[panel] = _holder
+                self.log = _holder
+                self.log_painter = None
+                return _holder
         is_chat = (panel == "chat")
         txt = tk.Text(parent, bg=st["bg"], fg=st["fg"],
                       # ★ [P1b] height 必须给个小值：Text 默认申报 24 行，
@@ -1290,17 +1711,26 @@ class ChatWindow(object):
                       #   的「输入栏」挤成 0 高（Tk 先 pack 的先占位）。
                       height=4,
                       font=(FONT_MONO if st["mono"] else FONT_UI),
-                      wrap="none" if st["mono"] else "word",
+                      # ★★ 2026-10-03：mono 面板原来是 wrap="none"（不折行、又没有横向
+                      #   滚动条）→ 超宽的行**直接冒到控件外面，永远看不到**。
+                      #   用户实测原话：「日志那边有很多字都被挡住了，在我看得到的范围
+                      #   之外」。实测确认：wrap="none" 时超长行不折（displaylines 不增），
+                      #   而 "char" / "word" 都会折行。
+                      #   → 统一改 "char"：任何超长串（长路径 / base64 / JSON 一行流）
+                      #     都被折断换行，**一个字符都不会丢**，因而**不再需要横向滚动条**。
+                      wrap="char" if st["mono"] else "word",
                       bd=0, highlightthickness=0, padx=10, pady=6,
                       insertbackground=st["fg"],
                       cursor="arrow" if is_chat else "xterm",
                       state="disabled" if is_chat else "normal")
-        sb = tk.Scrollbar(parent, orient="vertical", command=txt.yview,
-                          bg=THEME["panel"], troughcolor=st["bg"],
-                          bd=0, relief="flat")
-        txt.configure(yscrollcommand=sb.set)
-        sb.pack(side="right", fill="y")
+        # ★★ 深色滚动条（tk.Scrollbar 在本机画不出颜色，见 _sb_style_for 注释）
+        #   顺序要紧：**先 pack 滚动条再 pack 文本** —— Text 带 fill+expand，
+        #   先 pack 会把剩余空间全吃掉，滚动条宽度直接归零（实测踩过）。
+        #   两侧各 2px 留白 → 滚动条成为面板里被"明确留出来"的一栏。
+        sb = _make_scrollbar(parent, panel, txt)
+        sb.pack(side="right", fill="y", padx=(2, 2))
         txt.pack(side="left", fill="both", expand=True)
+        self._scrollbars[panel] = sb
         # ★ 滚轮只绑自己（沿用既有教训，绝不用 bind_all）
         txt.bind("<MouseWheel>",
                  lambda e, w=txt: (w.yview_scroll(int(-e.delta / 120), "units"),
@@ -1358,6 +1788,7 @@ class ChatWindow(object):
         return w
 
     def _float_body(self, win, panel):
+        self._logcon_detach()                # ★ [CONLOG] 同上
         for c in list(win.winfo_children()):
             c.destroy()
         bar = tk.Frame(win, bg=THEME["panel"])
@@ -1388,16 +1819,21 @@ class ChatWindow(object):
         self._tbar_open = False                  # 浮层是否显示
         self._tbar_pin = False                   # Ctrl+L / 点按钮：钉住
 
-        # ---- 常显行：开关 + 布局摘要 ----
+        # ---- 常显行：只剩一个「布局」开关 + 右侧布局摘要 ----
+        #   ★ [UI-COMPACT] 图标（⚙ / ▾ / ▴）全去；常显的「独立窗口」钮撤掉
+        #     —— 那条路仍可从展开菜单的「独立窗口模式」进入。
+        #   ★ 字号再小 1pt、行距收紧（贴住栏，不再撑高）。
+        _fs = (FONT_UI_S[0], max(8, FONT_UI_S[1] - 1))
         self._tgl = tk.Button(
-            bar, text="⚙ 布局 ▾", command=self._toggle_toolbar,
+            bar, text="布局", command=self._toggle_toolbar,
             bg=THEME["panel"], fg=THEME["accent"],
             activebackground=THEME["btn_hot"], activeforeground=THEME["text"],
-            relief="flat", bd=0, padx=8, pady=2, font=FONT_UI_S, cursor="hand2")
-        self._tgl.pack(side="left", pady=2)
+            relief="flat", bd=0, padx=6, pady=0, font=_fs, cursor="hand2")
+        self._tgl.pack(side="left", pady=1, padx=(8, 0))
+        self._btn_float = None            # ★ 常显钮已撤（功能在展开菜单里）
         self._lbl_layout = tk.Label(bar, text="", bg=THEME["panel"],
-                                    fg=THEME["text_dim"], font=FONT_UI_S)
-        self._lbl_layout.pack(side="right", padx=10)
+                                    fg=THEME["text_dim"], font=_fs)
+        self._lbl_layout.pack(side="right", padx=8)
 
         # ---- 浮层菜单：place 定位，不占布局空间；内容纵向排列 ----
         self._tbar_pop = tk.Frame(parent, bg=THEME["panel"],
@@ -1406,47 +1842,55 @@ class ChatWindow(object):
         self._fill_toolbar_opts(self._tbar_pop)
 
     def _fill_toolbar_opts(self, box):
-        """浮层菜单内容 —— **纵向一列**（标题 / 预设 / 动作 / 面板 / 提示）。"""
-        def _row(text, cmd, fg=None, pad=(12, 3)):
+        """浮层菜单内容 —— **纵向一列**（标题 / 预设 / 动作 / 面板 / 提示）。
+
+        ★ [UI-COMPACT] 字号再小 1pt、行距收紧；装饰性图标（⧉ ⤓ ⛔）去掉，
+          只保留有信息量的 ● （当前预设）与 ✓（面板是否可见）。
+        """
+        _fs = (FONT_UI_S[0], max(8, FONT_UI_S[1] - 1))
+
+        def _row(text, cmd, fg=None, pad=(10, 0)):
             b = tk.Button(box, text=text, command=cmd, anchor="w",
                           bg=THEME["panel"], fg=fg or THEME["text"],
                           activebackground=THEME["btn_hot"],
                           activeforeground=THEME["text"],
                           relief="flat", bd=0, padx=pad[0], pady=pad[1],
-                          font=FONT_UI_S, cursor="hand2")
+                          font=_fs, cursor="hand2")
             b.pack(fill="x", side="top")
             return b
 
         def _sep():
             tk.Frame(box, bg=THEME["btn_hot"], height=1).pack(
-                fill="x", side="top", pady=3)
+                fill="x", side="top", pady=2)
 
         def _head(t):
             tk.Label(box, text=t, bg=THEME["panel"], fg=THEME["text_dim"],
-                     font=FONT_UI_S, anchor="w").pack(
-                fill="x", side="top", padx=12, pady=(5, 2))
+                     font=_fs, anchor="w").pack(
+                fill="x", side="top", padx=10, pady=(3, 0))
 
         _head("布局预设")
         for name, lb in (("focus", "对话为主"), ("grid", "全览四格"),
                          ("lr", "左右对照"), ("tb", "上下对照"),
                          ("tabs", "全部页签")):
             mark = "● " if name == "focus" else "　 "
-            _row("   " + mark + lb, lambda n=name: self._preset(n))
+            _row(" " + mark + lb, lambda n=name: self._preset(n))
         _sep()
-        _row("   ⤓  全部停靠", self._dock_all, fg=THEME["accent"])
-        _row("   ⛔  中止正在运行的程序", self._abort_running,
+        _row(" 独立窗口模式（全部成窗 ↔ 全部收回）", self._toggle_independent,
+             fg=THEME["accent"])
+        _row(" 全部停靠", self._dock_all, fg=THEME["accent"])
+        _row(" 中止正在运行的程序", self._abort_running,
              fg=THEME.get("abort_fg") or THEME["text"])
         _sep()
         _head("面板（显示 / 隐藏）")
         for p in LAYOUT_PANELS:
             vis = self.model.group_of(p) is not None or p in self.floats
-            _row("   %s %s" % ("✓" if vis else "　", PANEL_LABELS.get(p, p)),
+            _row(" %s %s" % ("✓" if vis else "　", PANEL_LABELS.get(p, p)),
                  lambda pp=p: self._toggle_panel(pp))
         _sep()
-        tk.Label(box, text="  Ctrl+L 钉住 ｜ 移开自动收起",
+        tk.Label(box, text="Ctrl+L 钉住 ｜ 移开自动收起",
                  bg=THEME["panel"], fg=THEME["text_dim"],
-                 font=FONT_UI_S, anchor="w").pack(
-            fill="x", side="top", padx=12, pady=(2, 7))
+                 font=_fs, anchor="w").pack(
+            fill="x", side="top", padx=10, pady=(1, 3))
 
     def _refresh_pop(self):
         """重建浮层内容（面板 ✓ 状态会变）。"""
@@ -1479,15 +1923,12 @@ class ChatWindow(object):
         self._refresh_tgl()
 
     def _refresh_tgl(self):
-        """开关按钮上的箭头：▾ 收起 / ▴ 展开 / ▴📌 钉住。"""
+        """开关文案恒为「布局」（图标已去）；钉住状态用**底色**区分。"""
         try:
-            if getattr(self, "_tbar_pin", False):
-                txt = "⚙ 布局 ▴📌"
-            elif getattr(self, "_tbar_open", False):
-                txt = "⚙ 布局 ▴"
-            else:
-                txt = "⚙ 布局 ▾"
-            self._tgl.configure(text=txt)
+            _pin = bool(getattr(self, "_tbar_pin", False))
+            self._tgl.configure(
+                text="布局",
+                bg=THEME["btn_hot"] if _pin else THEME["panel"])
         except Exception:
             pass
 
@@ -1778,6 +2219,7 @@ class ChatWindow(object):
                 txt += "　浮动：" + "、".join(
                     PANEL_LABELS.get(p, p) for p in self.floats)
             self._lbl_layout.configure(text=txt + "  ")
+            self._sync_float_btn()          # ★ 独立窗口钮的文案跟着形态变
         except Exception:
             pass
 
@@ -1816,6 +2258,59 @@ class ChatWindow(object):
     def _dock_all(self):
         for panel in list(self.floats):
             self._dock(panel)
+
+    # ---------------------------------------------------------- 独立窗口模式
+    def _sync_float_btn(self):
+        """独立窗口钮的文案跟着形态走。"""
+        try:
+            b = getattr(self, "_btn_float", None)
+            if b is not None:
+                b.configure(text="⧉ 收回主窗口" if self.floats else "⧉ 独立窗口")
+        except Exception:
+            pass
+
+    def _enter_independent(self):
+        """独立窗口模式：**日志 / 状态 / 监控 各自成窗，对话留在主窗口**。
+
+        ★ 为什么对话不弹出：布局模型有一条硬不变量 —— **主树永不为空**
+          （`LayoutModel.detach()` 把最后一块面板摘走时会自动兜底塞回一个组）。
+          所以「四个全弹」在模型层根本做不到；而且也没必要 ——
+          对话就是主界面，另外三个才是要拉到第二块屏 / 各自放大看的辅助面板。
+          对话真想单独成窗，用面板标题栏的 ⧉ 按钮或 `/layout detach chat`。
+        """
+        for p in LAYOUT_PANELS:
+            if p == "chat":
+                continue
+            if self.model.group_of(p) is not None:
+                self._detach(p)
+        self._rebuild_views()
+
+    def _exit_independent(self):
+        """把所有独立窗口停靠回主窗口（单窗口形态）。"""
+        self._dock_all()
+        if not self.model.tree:
+            self.model.reset(_DEFAULT_LAYOUT_PRESET)
+        self._rebuild_views()
+
+    def _toggle_independent(self):
+        """★ 独立窗口模式开关 —— 「只留一个窗口」的后路。
+
+        常态：启动只有这一个窗口（对话 + 日志 + 状态 + 监控 都在里面）。
+        点这个钮：四个面板各自弹成独立窗口（可拉到第二块屏、各自最大化）。
+        再点一次：全部收回主窗口。
+        """
+        try:
+            if self.floats:
+                self._exit_independent()
+            else:
+                self._enter_independent()
+        except Exception:
+            pass
+        try:
+            self._refresh_pop()
+            self._layout_status()
+        except Exception:
+            pass
 
     def _close_panel(self, panel):
         self.model.close(panel)
@@ -1877,6 +2372,28 @@ class ChatWindow(object):
     def _scroll_bottom(self):
         try:
             self.chat.see("end")
+        except Exception:
+            pass
+
+    def _trim_chat(self):
+        """★ [FIX 2026-10-03] 对话面板行数上限：视图只留最近 MAX_CHAT_LINES 行。
+
+        与 _paint_plain 的裁剪同源（含同一个 off-by-one 修正）：
+        删 n 行要删 "1.0" → "(n+1).0"。数据层不动，重建时 replay() 补齐。
+
+        ★ 注意：对话区每写完一条会置回 disabled，此时 Tk 会拒绝 delete ——
+          必须临时切 normal、删完再还原（第一版漏了这一步，回归实测抓出来的）。
+        """
+        tw = self.chat
+        if tw is None:
+            return
+        try:
+            total = int(tw.index("end-1c").split(".")[0])
+            if total > MAX_CHAT_LINES:
+                _st = str(tw.cget("state"))
+                tw.configure(state="normal")
+                tw.delete("1.0", "%d.0" % (total - MAX_CHAT_LINES + 1))
+                tw.configure(state=_st)
         except Exception:
             pass
 
@@ -1964,8 +2481,12 @@ class ChatWindow(object):
         self._spin_clear_job = None
 
     # ------------------------------------------ 落款：时间 + 本轮标记
-    def _foot(self):
+    def _foot(self, at=None, cost=None):
         """回复末尾的落款「—— 16:52:31 · ⏱️ 本轮 44.8s」。
+
+        at / cost：★ [STREAM-KEEP v2] 允许传入「记录下来的」时间与成本，
+        使重放后的落款与首次显示完全一致（切标签不再"变时间"）。
+        
 
         ★ 去重按「轮」不按「时间」：同一条回复可能经过两条路径 ——
           · 流式：stream_end 落一次款；
@@ -1990,7 +2511,8 @@ class ChatWindow(object):
                                  font=FONT_UI_S, spacing3=6)
                 self._tagged.add("mk_foot")
             tw.insert("end", "        —— %s%s\n"
-                      % (time.strftime("%H:%M:%S"), cost_tag()), ("mk_foot",))
+                      % (at or time.strftime("%H:%M:%S"),
+                         cost if cost is not None else cost_tag()), ("mk_foot",))
         except Exception:
             pass
         try:
@@ -2055,6 +2577,76 @@ class ChatWindow(object):
             tw.configure(state="disabled")
         except Exception:
             pass
+        self._trim_chat()              # ★ [FIX] 对话面板行数上限
+        self._scroll_bottom()
+        self._refresh_status()
+        return tw
+
+    def _bubble_meta(self, kind, text, meta, item=None):
+        """渲染「流式条目」（3 元 item）：前缀 + ANSI 正文 + 定稿后的落款。
+
+        ★ [STREAM-KEEP v2] 这是「切标签不吞回复」的落点：
+          · 正文取数据层那条可变 item 的当前文本（半截也能显示）；
+          · 若该条目仍在本轮流式中（item is self._stream["item"]），
+            复用 / 重建 painter，让后续增量无缝续写；
+          · 定稿后（meta["done"]）落款用 meta 记录的时间，切来切去不变。
+        """
+        tw = self.chat
+        if tw is None:
+            return None
+        st = self._stream
+        live = bool(st is not None and item is not None
+                    and st.get("item") is item)
+        try:
+            tw.configure(state="normal")
+        except Exception:
+            pass
+        self._prefix(kind)
+        try:
+            if meta.get("ansi"):
+                painter = None
+                if live:
+                    painter = st.get("painter")
+                    if painter is None or getattr(painter, "w", None) is not tw:
+                        painter = AnsiPainter(
+                            tw, FONT_MONO,
+                            "st%d" % getattr(self, "_stream_seq", 1))
+                        st["painter"] = painter
+                        st["body"] = tw
+                if painter is None:
+                    painter = AnsiPainter(
+                        tw, FONT_MONO,
+                        "st%d" % getattr(self, "_stream_seq", 1))
+                if text:
+                    painter.feed(text)
+            else:
+                render_bubble(tw, text or "")
+        except Exception:
+            pass
+        if meta.get("done"):
+            if meta.get("aborted"):
+                try:
+                    tw.tag_configure("st_abort", foreground=THEME["abort_fg"])
+                    tw.insert("end", "\n⚠️ （输出中断）", ("st_abort",))
+                except Exception:
+                    pass
+            try:
+                if "mk_foot" not in self._tagged:
+                    tw.tag_configure("mk_foot", foreground=THEME["text_dim"],
+                                     font=FONT_UI_S, spacing3=6)
+                    self._tagged.add("mk_foot")
+                tw.insert("end", "        —— %s%s\n"
+                          % (meta.get("t") or time.strftime("%H:%M:%S"),
+                             meta.get("cost") or ""), ("mk_foot",))
+            except Exception:
+                pass
+        try:
+            # ★ 仍在流式中的条目保持「可写」：后续 stream_delta 还要往同一控件续写
+            #   （否则 Tk 会因 disabled 拒绝 insert，增量悄悄丢掉 —— 回归 D 实测）
+            tw.configure(state="normal" if live else "disabled")
+        except Exception:
+            pass
+        self._trim_chat()              # ★ [FIX] 对话面板行数上限
         self._scroll_bottom()
         self._refresh_status()
         return tw
@@ -2203,18 +2795,30 @@ class ChatWindow(object):
 
     # ------------------------------------------------------ 操作台：流式气泡
     def stream_begin(self, who=None):
-        """开一条流式输出 —— 直接写进对话流（不再单开气泡）。"""
+        """开一条流式输出 —— 正文先进数据层，再投影到对话流。
+
+        ★ [STREAM-KEEP v2] 关键变化：即使「对话」面板不在前台也照常开流 ——
+          数据层照写，控件等 replay() 补。切标签 / 动布局不会再吞掉回复。
+        """
         self.stream_end()
         self._stream_seq += 1
+        # 登记一条「可变」item：正文（含 ANSI 原文）随 delta 实时更新
+        item = ["ai", "", {"ansi": True, "t": "", "cost": "",
+                           "aborted": False, "done": False}]
+        self._emit_data("chat", item)
+        st = {"item": item, "body": None, "painter": None,
+              "fit_pending": False, "n": 0, "text": ""}
+        self._stream = st
         tw = self.chat
-        if tw is None:                     # ★ [P1b] 对话面板不在前台 → 不开流
-            self._stream = None
-            return 0
-        self._prefix("ai")                 # 先落「🐟 」前缀，正文紧随其后
-        painter = AnsiPainter(tw, FONT_MONO, "st%d" % self._stream_seq)
-        self._stream = {"body": tw, "painter": painter,
-                        "fit_pending": False, "n": 0}
-        self._scroll_bottom()
+        if tw is not None:                 # 面板在 → 立刻建 painter 开画
+            try:
+                tw.configure(state="normal")
+            except Exception:
+                pass
+            self._prefix("ai")             # 先落「🐟 」前缀，正文紧随其后
+            st["body"] = tw
+            st["painter"] = AnsiPainter(tw, FONT_MONO, "st%d" % self._stream_seq)
+            self._scroll_bottom()
         return self._stream_seq
 
     def stream_delta(self, text):
@@ -2224,11 +2828,19 @@ class ChatWindow(object):
         if self._stream is None:
             self.stream_begin()
         st = self._stream
-        try:
-            st["painter"].feed(text)
-        except Exception:
-            pass
+        if st is None:
+            return
         st["n"] += len(text)
+        st["text"] = (st.get("text") or "") + text
+        item = st.get("item")
+        if item is not None:               # ★ [STREAM-KEEP v2] 数据层实时含半截正文
+            item[1] = st["text"]
+        painter = st.get("painter")
+        if painter is not None:
+            try:
+                painter.feed(text)
+            except Exception:
+                pass
         # 重绘比较贵 → 节流合并：看得见在长，又不拖慢界面
         if not st.get("fit_pending"):
             st["fit_pending"] = True
@@ -2245,29 +2857,50 @@ class ChatWindow(object):
         self._scroll_bottom()
 
     def stream_end(self, aborted=False):
-        """收口当前流式输出。返回本轮灌进去的字符数。"""
+        """收口当前流式输出。返回本轮灌进去的字符数。
+
+        ★ [STREAM-KEEP v2] 收口时把落款时间 / 成本 / 中断标记一并写进数据层条目，
+          这样切标签重放后落款与首次显示完全一致（不会"变时间"）。
+        """
         st = self._stream
         if not st:
             return 0
         self._stream = None
-        tw = st["body"]
+        item = st.get("item")
+        meta = None
+        if item is not None and len(item) > 2 and isinstance(item[2], dict):
+            meta = item[2]
+            meta["t"] = time.strftime("%H:%M:%S")
+            meta["cost"] = cost_tag()
+            meta["aborted"] = bool(aborted)
+            meta["done"] = True
+        tw = st.get("body")
+        painter = st.get("painter")
+        if tw is None or painter is None:
+            return st.get("n", 0)          # 面板不在前台：数据层已定稿，等 replay 补
         try:
-            if tw is None or not tw.winfo_exists():
-                return 0
+            if not tw.winfo_exists():
+                return st.get("n", 0)
         except Exception:
-            return 0
+            return st.get("n", 0)
         try:
-            tail = st["painter"].flush()
+            tw.configure(state="normal")   # ★ 收口写入前确保控件可写
+        except Exception:
+            pass
+        try:
+            tail = painter.flush()
             if tail:
-                st["painter"].feed(tail)
+                painter.feed(tail)
             if aborted:
                 tw.insert("end", "\n⚠️ （输出中断）", ("st_abort",))
                 tw.tag_configure("st_abort", foreground=THEME["abort_fg"])
             tw.insert("end", "\n")
-            self._foot()                   # ★ 流式收尾也落款（2 秒闸门防重复）
+            self._foot(at=(meta.get("t") if meta else None),
+                       cost=(meta.get("cost") if meta else None))
             tw.configure(state="disabled")
         except Exception:
             pass
+        self._trim_chat()              # ★ [FIX] 对话面板行数上限（流式路径也要裁）
         self._scroll_bottom()
         self._refresh_status()
         return st.get("n", 0)
@@ -2284,6 +2917,20 @@ class ChatWindow(object):
         self._scroll_bottom()
 
     # ------------------------------------------------------------ ★ [P1a] 数据层
+    def _emit_data(self, panel, item):
+        """只写数据层、不投影视图（★ [STREAM-KEEP v2] 流式专用入口）。
+
+        流式正文以前只写在控件上、数据层毫不知情，切标签 / 动布局销毁控件后
+        内容就再也回不来。改成先写数据层，视图只是它的投影，重建后由 replay() 补回。
+        """
+        buf = self.data.get(panel)
+        if buf is None:
+            buf = self.data[panel] = []
+        buf.append(item)
+        if len(buf) > DATA_CAP:
+            del buf[:len(buf) - DATA_CAP]
+        return item
+
     def _emit(self, panel, item):
         """写数据层（唯一真源），再把这一条投影到当前视图。
 
@@ -2314,9 +2961,17 @@ class ChatWindow(object):
         if panel == "chat":
             if getattr(self, "chat", None) is None:
                 return None
+            # ★ [STREAM-KEEP v2] 3 元条目 = 流式 AI 回复（ANSI 原文 + 落款元数据）
+            if len(item) > 2 and isinstance(item[2], dict):
+                return self._bubble_meta(item[0], item[1], item[2], item)
             kind, text = item
             return self._bubble(kind, text)
         if panel in ("log", "status", "exec"):
+            if panel == "log":              # ★ [CONLOG] 日志 → 真控制台
+                _cl = getattr(self, "_logcon", None)
+                if _cl is not None and getattr(_cl, "attached", False):
+                    if _cl.write(item):
+                        return None
             # ★ [P1c] 三个纯文本面板共用一套渲染
             return self._paint_plain(panel, item)
         return None
@@ -2336,23 +2991,37 @@ class ChatWindow(object):
         p = self.painters.get(panel)
         if t is None or p is None:
             return None
-        at_bottom = True
-        try:
-            at_bottom = t.yview()[1] > 0.995
-        except Exception:
-            pass
+        # ★★ [PERF v1] 2026-10-03：**不要每条都调 yview()**
+        #   无参 yview() 要算可视比例，会**强制 Tk 重算整块 Text 的显示行**；
+        #   实测 4000 行 wrap="char" 面板单次 ≈16ms，而 _poll 一轮最多搬 200 条
+        #   → 一轮就是约 3 秒的 Tk 线程完全阻塞（现象：界面像卡死 / 无响应）。
+        #   "在不在底部"不需要精确，改成**每 200ms 量一次**。
+        _now = time.time()
+        _sc = getattr(self, "_plain_bottom", None)
+        if _sc is None:
+            _sc = self._plain_bottom = {}
+        st = _sc.get(panel)
+        if st is None or (_now - st[1]) > 0.2:
+            try:
+                _ab = bool(t.yview()[1] > 0.995)
+            except Exception:
+                _ab = True
+            st = _sc[panel] = [_ab, _now]
+        at_bottom = st[0]
         try:
             t.configure(state="normal")
             p.feed(text)
             total = int(t.index("end-1c").split(".")[0])   # 限制行数
             if total > MAX_LOG_LINES:
-                t.delete("1.0", "%d.0" % (total - MAX_LOG_LINES))
+                # ★ [FIX 2026-10-03] 删 n 行要删 "1.0"→"(n+1).0"；
+                #   原写法少删 1 行 → 面板长期稳定在 MAX_LOG_LINES+1 行。
+                t.delete("1.0", "%d.0" % (total - MAX_LOG_LINES + 1))
             t.configure(state="disabled")
         except Exception:
             pass
         if at_bottom:
-            _now = time.time()
-            if (_now - getattr(self, "_last_see", 0.0)) > 0.05:
+            # ★ [PERF v1] see() 同样强制重排；50ms → 150ms，砍掉 2/3 的强制重排。
+            if (_now - getattr(self, "_last_see", 0.0)) > 0.15:
                 self._last_see = _now
                 try:
                     t.see("end")
@@ -3142,7 +3811,7 @@ def _demo():
     print("=" * 70)
     print("  · Enter 发送 / Shift+Enter 换行")
     print("  · 直接把文件或图片拖进窗口试试")
-    print("  · 右上角 📎 选文件、🖼 贴剪贴板图片")
+    print("  · 工具栏上的 📎 选文件、🖼 贴剪贴板图片")
     print("  · 关闭窗口即退出演示")
     print()
 
@@ -3203,6 +3872,7 @@ def _demo():
 
 def _selftest():
     """程序化断言。无图形会话时自动跳过（返回 0 并说明）。"""
+    _LOG_CONSOLE[0] = False      # ★ [CONLOG] 自测用 Tk Text，便于断言文本
     fails = []
 
     def check(name, cond, detail=""):
@@ -3498,6 +4168,12 @@ def _selftest():
             except Exception:
                 pass
         w.alive = False
+        # ★ [SELFTEST-ISOLATE 2026-10-03] 自测必须跑在「默认布局」下：
+        #   实机 .env 注入的 UI_LAYOUT（例如单组三页签）会让下面
+        #   「默认预设 focus 建出 3 个组」等断言**假失败** —— 测的是环境、不是代码。
+        #   自测是独立进程，这里清掉即可，无需还原。
+        os.environ.pop("UI_LAYOUT", None)
+        os.environ.pop("UI_GEOM_MAIN", None)
         w2 = ChatWindow(title="布局自测")
         w2.root = root
         w2._ui_mode = "editor"
@@ -3549,6 +4225,72 @@ def _selftest():
         check("★ 面板 Text 申报高度压小（防把输入栏挤成 0 高）",
               bool(_th) and all(h <= 6 for h in _th), str(_th))
         check("对话面板已渲染到视图", "chat" in w2.texts, str(sorted(w2.texts)))
+        # ---- ★ 滚动条：必须是 ttk 深色版（tk.Scrollbar 在本机画不出颜色）----
+        _sbs = {p: w2._scrollbars.get(p) for p in w2.texts}
+        check("★ 每个可见面板都配了滚动条",
+              bool(_sbs) and all(v is not None for v in _sbs.values()),
+              str(sorted(_sbs)))
+        check("★ 滚动条是 ttk.Scrollbar（不是画不出颜色的 tk.Scrollbar）",
+              all(isinstance(v, ttk.Scrollbar) for v in _sbs.values()
+                  if v is not None),
+              str([type(v).__name__ for v in _sbs.values()]))
+        check("★ 滚动条样式名按面板区分",
+              all(str(v.cget("style")) == "FF.%s.Vertical.TScrollbar" % p
+                  for p, v in _sbs.items() if v is not None),
+              str([(p, str(v.cget("style"))) for p, v in _sbs.items() if v]))
+        _sst = ttk.Style(root)
+        try:
+            _tc = str(_sst.lookup("FF.chat.Vertical.TScrollbar", "troughcolor") or "")
+        except Exception:
+            _tc = ""
+        check("★ 槽色真的进了样式（= 面板底色，不再是系统浅色）",
+              _tc.lower() == str(THEME["bg"]).lower(), repr(_tc))
+        try:
+            _tw = str(_sst.lookup("FF.chat.Vertical.TScrollbar", "width") or "")
+        except Exception:
+            _tw = ""
+        check("★ 滚动条宽度被明确预留（style width）",
+              _tw == str(SB_WIDTH), repr(_tw))
+        check("★ Text ↔ 滚动条 双向绑定已接好",
+              all(bool(v.cget("command")) for v in _sbs.values() if v is not None)
+              and all(bool(w2.texts[p].cget("yscrollcommand")) for p in _sbs),
+              "")
+        # ---- ★ 折行：mono 面板绝不能再 wrap="none"（超宽行会冒出去看不见）----
+        _wr = {p: str(w2.texts[p].cget("wrap")) for p in w2.texts}
+        check("★ 所有面板都折行（不再有字冒出去）",
+              all(v in ("char", "word") for v in _wr.values()), str(_wr))
+        check("★ mono 面板（日志/监控）用 char 折行",
+              all(_wr.get(p) == "char" for p in ("log", "exec") if p in _wr),
+              str({k: v for k, v in _wr.items() if k in ("log", "exec")}))
+        check("★ 面板不再需要横向滚动条（内容必然可见）",
+              all(not w2.texts[p].cget("xscrollcommand")
+                  for p in w2.texts), "")
+        # ---- ★ [UI-COMPACT] 独立窗口模式：常显钮已撤，改从展开菜单进入 ----
+        check("★ 布局栏不再有常显的「独立窗口」钮",
+              getattr(w2, "_btn_float", None) is None,
+              str(getattr(w2, "_btn_float", "无")))
+        check("★ 布局开关文案已去图标（只有「布局」二字）",
+              str(w2._tgl.cget("text")) == "布局",
+              str(w2._tgl.cget("text")))
+        w2._toggle_independent(); root.update()
+        check("★ 走菜单 → 日志/状态/监控 三个独立成窗（对话留主窗口）",
+              len(w2.floats) == 3 and "chat" not in w2.floats
+              and set(w2.floats) == {"log", "status", "exec"}, str(sorted(w2.floats)))
+        check("★ 独立成窗后主窗口只剩对话（主树不为空的不变量）",
+              w2.model.group_of("chat") is not None
+              and all(w2.model.group_of(p) is None
+                      for p in ("log", "status", "exec")),
+              str([(p, w2.model.group_of(p)) for p in LAYOUT_PANELS]))
+        for _p in ("log", "status", "exec"):
+            check("  → %s 真的开了 Toplevel" % _p, _p in w2.floats)
+        w2._toggle_independent(); root.update()
+        check("★ 再点一次 → 全部收回，窗口归零",
+              len(w2.floats) == 0, str(sorted(w2.floats)))
+        check("★ 收回后面板都回到组里",
+              all(w2.model.group_of(p) is not None for p in LAYOUT_PANELS),
+              str([w2.model.group_of(p) for p in LAYOUT_PANELS]))
+        # ★ 收尾：把布局复位，别把脏状态留给后面的断言
+        w2._preset("focus"); root.update()
         w2._split("chat", "h"); root.update()
         check("向右拆分后组数 +1", len(w2.model.leaf_groups()) == 4,
               str(w2.model.leaf_groups()))

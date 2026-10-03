@@ -102,8 +102,9 @@ if "%FISH_LANG%"=="en" (
     echo [FatFish runtime ended] 按任意键关闭本窗口 [press any key to close this window]...
 )
 REM ---- [QUIT-CLEAN v1] 用户主动退出（quit / Ctrl+C）→ 连窗口一起关 ----
-REM   注意用 exit（不带 /b）：fatfish1.2.2.bat 是用 `cmd /k` 启动本文件的，
-REM   只有 exit 才能把那个 /k 的 cmd 也结束掉，窗口才会真的消失。
+REM   [GUI-FIRST v1] 现在由 fatfish1.2.2.bat 用 **call** 在同一窗口里启动本文件
+REM   （不再 start 另开一个 cmd /k）。exit 依然是对的用法：它结束当前 cmd 进程，
+REM   窗口随之消失；即便别处仍用 cmd /k 调本文件，exit 也能把那个 /k 一起收掉。
 if exist "%~dp0.fatfish_tmp\quit_clean" (
     del "%~dp0.fatfish_tmp\quit_clean" >nul 2>nul
     del "%~dp0.fatfish_tmp\shutdown.signal" >nul 2>nul

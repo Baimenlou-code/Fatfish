@@ -688,6 +688,238 @@ v1.2.2 发布后，同一份安装器 `FATPACKII.bat`（1.19 MB）**同时挂在
 
 ---
 
+## 十八、GUI-First 收尾：只留一块窗口 · 崩溃兜底 · 2026-10-03（深夜）
+
+> 一句话：**把「一堆黑窗口」收成一块对话窗口，并保证硬崩溃时不会把用户关在看不见的窗口外面。**
+> 依据：`logs/2026/10/03/chat_185110.log`（18:51–20:05 单窗口合并）与 `chat_200550.log`（20:05 起 崩溃兜底 + 实测）。
+
+### 18.1 目标与真相
+
+标题栏四五个黑窗口（启动器 / 运行窗 / 监控窗 / 状态台）与「GUI 为主」的定位不符。
+难点不在"藏窗口"，而在于**本机双击出来的控制台根本藏不掉**：
+
+| 启动方式 | 窗口类名 | 能否 `ShowWindow` 隐藏 |
+|---|---|---|
+| `CREATE_NEW_CONSOLE` / 默认宿主（Win11 默认终端 = Windows 终端） | `PseudoConsoleWindow` | ❌ 那是 ConPTY 内部伪窗口，藏它等于没藏 |
+| `conhost.exe` 显式启动 | **`ConsoleWindowClass`** | ✅ 传统控制台宿主，可隐藏 |
+
+所以启动器先**用 conhost 把自己重新托管一次**，再往下走：
+
+```bat
+if not defined FATFISH_NO_CONHOST if not defined FISH_CONHOST if exist "%SystemRoot%\System32\conhost.exe" (
+    set "FISH_CONHOST=1"
+    start "" "%SystemRoot%\System32\conhost.exe" cmd /k "%~f0"
+    exit
+)
+```
+
+（`FISH_CONHOST` 防循环；`FATFISH_NO_CONHOST=1` 可整体关掉换宿主。）
+
+### 18.2 动作清单
+
+| # | 改动 | 位置 |
+|---|---|---|
+| 1 | **控制台隐藏 / 恢复 / 查询** | 新增 `fatfish_core/consolehide.py` |
+| 2 | 主程序接线：导入 + `_console_autohide()` / `_console_restore()` + **隐藏延后 0.8s**（等 Tk 把窗口画到屏上）+ `/console on\|off\|status` + 「关掉唯一的窗口 = 主动退出」 | `FATHFISHI.py` |
+| 3 | 启动枢纽默认**单窗口**（不再另开监控器 / 状态台），`FATFISH_MULTIWIN=1` 回旧形态 | `launch.py` |
+| 4 | 启动器 conhost 换宿主 + `call fatfish_runtime.bat`（同窗口跑） | `fatfish1.2.2.bat` |
+| 5 | 运行窗改 `call` 语义；正常退出用 `exit` 连窗口一起收 | `fatfish_runtime.bat` |
+| 6 | 布局栏最右 **⧉ 独立窗口**：一键把日志 / 状态 / 监控弹出来 | `chat_window.py` |
+| 7 | mono 面板 `wrap="none"` → **`"char"`**（长行不再冒出去） | `chat_window.py` |
+| 8 | 深色滚动条：`tk.Scrollbar` 本机忽略颜色 → **`ttk.Scrollbar` + clam 自绘** | `chat_window.py` |
+
+### 18.3 安全边界（绝不误伤）
+
+`consolehide` 只在窗口类名**明确认得**时才动手，白名单只有 `ConsoleWindowClass`：
+非 Windows / 拿不到句柄 / 认不出类名 → 一律返回 False、静默降级（保持窗口可见）。
+`PseudoConsoleWindow`（ConPTY）**明令不动** —— 隐藏它改变不了用户眼前那个终端，
+却会让 `hide()` **假报成功**。宁可留一个窗口，也绝不误伤整个终端。
+
+### 18.4 CRASH-GUARD：硬崩溃的兜底（本次新增）
+
+**问题**：主程序起来 0.8s 后把控制台藏起来；正常退出时 `_shutdown_all()` 会 `_console_restore()`
+把窗口请回来 —— 但**硬崩溃**（`0xC0000409` / 被强杀）走不到那一步。此时 `launch.py` 的
+`main_proc.wait()` 照样返回、`fatfish_runtime.bat` 走到末尾 `pause` 等按键，而窗口看不见
+→ **用户对着空白桌面干等一个永远不会来的按键**。
+
+**修法**：兜底放进 `launch.py` —— 它与主程序**共用同一个控制台窗口**，无论主程序怎么结束，
+`wait()` 之后的位置都一定会执行到：
+
+```python
+try:
+    from fatfish_core import consolehide as _ch
+    if _ch.available() and not _ch.is_visible():
+        _ch.show()
+        _say("  🖥  控制台窗口已恢复显示 [console restored]（主程序可能是异常结束）")
+except Exception:
+    pass
+```
+
+本来就可见时 `is_visible()` 短路 → 不抢焦点、零副作用（正常退出路径无扰动）。
+
+**端到端验证**（真控制台 + 真硬退出，`workspace/_crashguard/`）：
+
+| 步骤 | 观测 |
+|---|---|
+| 探针窗口类名 | `ConsoleWindowClass`（`available=True`） |
+| 假主程序隐藏窗口 | `hide_ok=True` → `visible_after_hide=False` |
+| 假主程序 `os._exit(7)`（跳过 atexit/finally/一切清理） | `launch_rc=7` |
+| **CRASH-GUARD 之后** | **`visible_after=True`** ✅ |
+
+### 18.5 conhost 交接链实测（含空格路径）
+
+上一阶段唯一没覆盖的风险点是「安装路径含空格时的引号安全性」，本次补测
+（`workspace/_conhost_probe/`，每场景最多交接一次，有文件哨兵兜底）：
+
+| 场景 | 交接次数 | `start` 出来的窗口 | conhost 子窗口 | `FISH_CONHOST` |
+|---|---|---|---|---|
+| 无空格路径 | 恰好 1 次 | `PseudoConsoleWindow` | **`ConsoleWindowClass`** ✅ | `1` |
+| **含空格路径** | 恰好 1 次 | `PseudoConsoleWindow` | **`ConsoleWindowClass`** ✅ | `1` |
+
+→ 引号安全、换宿主成功、防循环有效。
+
+### 18.6 踩到的坑（都留了档）
+
+| 坑 | 现象 | 教训 |
+|---|---|---|
+| `%` 格式化撞车 | 探针里 `%SystemRoot%` / `%~dp0` 直接喂给 Python `%` 格式化 → `ValueError` | bat 路径一律**字符串拼接**，别走 `%` 格式化 |
+| 模板变量漏定义 | bat 模板重写时漏了 `set "RES=..."` → 所有输出重定向到空文件名；测试"跑通"却什么都没写 | 探针自身要有**自证**（哨兵 / 逐项断言），"没报错" ≠ "对了" |
+| 继承的环境变量污染实验 | 本会话就是 `fatfish1.2.2.bat` 起的，`FISH_CONHOST=1` 早在环境里 → 探针第一遍就短路，**根本没发生交接** | 做环境相关实验，先把 `env` 擦干净 |
+
+### 18.7 已知遗留
+
+| 项 | 说明 |
+|---|---|
+| 🟡 **bat 层双保险未上** | `launch.py` 兜底覆盖了「主程序异常结束」，但若 `launch.py` 自己也没走到那一步，仍会落回隐藏窗口 + `pause`。计划在 `fatfish_runtime.bat` 的 `pause` 前再补一次 `consolehide.show()`（用 `python -c` + `os.getcwd()` 拼路径，避开 bat 引号地狱）。**须在程序停止后改** —— 运行中的 bat 边跑边改会让 cmd 字节偏移错位 |
+| 🟡 **`fatfish/` 仓库同步** | 本轮 `launch.py` 改动尚未提交 |
+| 🟡 **正常退出时的窗口闪现** | `_shutdown_all()` 会先 `show()` 再让 bat `exit`，干净退出路径上控制台可能一闪而过（既有行为，非本轮引入） |
+
+### 18.8 性能：`_paint_plain` 大输出不再假死（21:09）
+
+**症状**：主程序一刷屏，界面就像卡死。
+
+**量化**（`workspace/conhost_log/poc.py` 打样，4000 行 `wrap="char"` 面板）：
+
+| 做法 | 单条耗时 |
+|---|---|
+| 原：插入 + 每条裁剪 + **每行 `see()`** | **25.04 ms**（1200 行就卡了 30 秒） |
+| 改：`see()` 节流 50→150 ms + 「在不在底部」200 ms 量一次 | **0.22 ms** |
+
+**改动**（`chat_window.py::_paint_plain`）：不再每条都调 `yview()` / `see("end")` ——
+无参 `yview()` 要算可视比例，会强制 Tk 重算整块 Text 的显示行，这才是真正的开销源。
+（`see()` 本身也强制重排，所以一并节流。）
+
+### 18.9 STREAM-KEEP：切标签 / 动布局不再吞掉流式回复（v1 21:16 → **v2 22:30 修好**）
+
+**症状**：AI 正在吐字时切「状态 / 日志」再切回来，那条回复蒸发；回复**已结束**再切，同样蒸发。
+丢的永远是 AI 说的 —— 用户消息（走 `push_user → _emit`）从不丢。
+
+**根因（两层叠加）**
+
+1. `data["chat"]` 是唯一真源，但**流式正文只写控件**（`stream_delta → painter.feed`），数据层毫不知情；
+2. `_rebuild_views()` 销毁全部 Text 后 `replay("chat")` 只从数据层重放 → AI 回复根本不在里面。
+
+**v1 为什么没修好**：回灌条件是 `if _was_stream and self.chat is not None`，
+而切标签时 `self.chat` 恒为 `None` → 短路跳过；更糟的是它在重建开头就把 `self._stream = None`，
+连唯一副本也销毁了。上轮自测"通过"是因为验证脚本直接调 `_rebuild_views()`
+（此时 active 仍是「对话」），**绕开了真实路径 `_activate(gid, other)`**。
+
+**v2 修法 —— 让数据层真正成为唯一真源**
+
+| # | 位置 | 改动 |
+|---|---|---|
+| 1 | 新增 `_emit_data()` | 只写数据层、不投影（流式专用入口） |
+| 2 | `stream_begin` | 登记**可变** 3 元条目 `["ai", "", meta]`；面板不在前台也照常开流 |
+| 3 | `stream_delta` | 每段增量同步 `item[1]`；painter 不存在时只更新数据层 |
+| 4 | `stream_end` | 定稿 `meta`（时间 / 成本 / 中断标记） |
+| 5 | `_foot(at, cost)` | 支持传入「记录下来的」时间与成本 → 重放后落款不变 |
+| 6 | `_paint` chat 分支 | 3 元条目 → `_bubble_meta()` |
+| 7 | 新增 `_bubble_meta()` | 渲染流式条目；复用 / 重建 painter，后续增量无缝续写 |
+| 8 | `_rebuild_views` | 删掉失效的「回灌全文」，改为只断开旧 painter/body 绑定 |
+| 9 | 修正 | 重放中的条目保持 `state="normal"`，否则后续 `insert` 被 Tk 拒收（回归场景 D 抓出来的） |
+
+**验证**
+
+| 项 | 结果 |
+|---|---|
+| 回归探针 A~G（离屏真布局 + 真实切标签） | ✅ 全绿 |
+| `chat_window.py --selftest` | ✅ **106 项全绿** |
+| `.env` 未被改动（mtime/size 自证） | ✅ |
+| CRLF 保真 | ✅ |
+
+场景覆盖：A 流式中切标签 / B 回复后切标签 / C 连切不重复 / D 流式中连切两次增量不丢 /
+E 面板离台时开流 / F 落款时间重放不变 / G 环境未动。
+
+**回滚**：`_backup\chat_window.py.20261003_222855.stream_keep2.bak`（打补丁之前）。
+
+### 18.10 三处小 bug 收尾 + 自测环境隔离（22:40）
+
+| # | bug | 现象 | 修法 |
+|---|---|---|---|
+| 1 | 日志裁剪 off-by-one | 面板长期稳定在 `MAX_LOG_LINES + 1` 行 | 删 n 行要用 `"1.0"` → `"(n+1).0"`（原写法少删 1 行） |
+| 2 | 对话面板无行数上限 | 日志 / 状态 / 监控都裁剪，只有对话区只增不减 | 新增 `MAX_CHAT_LINES = 6000` + `_trim_chat()`，在 `_bubble` / `_bubble_meta` / `stream_end` 末尾调用；裁剪前临时切 `normal`（写完一条是 `disabled`，Tk 会拒绝 `delete`）—— 第一版漏了这两点，回归实测逐个抓出来 |
+| 3 | `_WinMirror` 静默丢 1000 段 | 缓冲超 2000 段就 `del [:1000]`，日志缺行却毫无提示 | 丢弃时插一条「… 输出过密，已省略 1000 段」标记，不再静默 |
+| 4 | 自测 5 项假失败 | `.env` 里的实机 `UI_LAYOUT`（单组三页签）污染自测 → 「默认预设 focus 建出 3 个组」等断言失败 | `_selftest` 构造 editor 窗口前 `os.environ.pop("UI_LAYOUT")` / `("UI_GEOM_MAIN")`，隔离环境 |
+
+> 💡 第 4 条的意义：此前每次自测都带着 5 个红叉，把真正的回归信号淹没了 ——
+> 现在「全绿」才真正等于「没事」。
+
+### 18.11 发布收尾：打包清单漏包修复 + 重新打包覆盖 v1.2.2（22:48 ~ 23:00）
+
+**① 打包清单漏了当天新增的三个文件（发布阻断级）**
+
+`make_fatpack.py` 自带的 `audit_embed()` 在打包前报出：
+
+```
+[!] chat_window.py 依赖本地模块 conlog，但它不在 EMBED 中
+```
+
+人工复核后确认共**三处**漏网（都是 2026-10-03 新增）：
+
+| 文件 | 谁在用 | 漏了的后果 |
+|---|---|---|
+| `conlog.py` | `chat_window.py`（`import conlog`，try 保护） | 真控制台「日志」页 **静默降级**成 Tk 文本 |
+| `loghost.py` | `conlog.py` 用 `CREATE_NEW_CONSOLE` 起它当宿主 | 同上（少了宿主进程，窗口根本起不来） |
+| `fatfish_core/consolehide.py` | `FATHFISHI.py` 与 `launch.py`（均 try 导入） | 控制台**藏不起来** → 回到「一堆黑窗口」 |
+
+> ⚠️ **审计有个盲区**（本次一并记录）：`audit_embed()` 只登记 `Import` / `ImportFrom` 的
+> **顶层模块名**，所以 `from fatfish_core import consolehide` 会被解析成「顶层包
+> `fatfish_core` 已在清单里」→ **查不出来**。它只抓到了 `import conlog` 这一处。
+> `loghost.py` 更是没有任何文件 import 它（是靠 subprocess 启动的），审计天然看不见。
+> 结论：**这三个文件必须人工维护**，已加注释说明。
+
+**② 文件同步**（根目录 → `fatfish/` 仓库）
+
+| 类别 | 文件 |
+|---|---|
+| 更新 | `FATHFISHI.py` · `chat_window.py` · `launch.py` · `fatfish1.2.2.bat` · `fatfish_runtime.bat` |
+| 新增 | `conlog.py` · `loghost.py` · `fatfish_core/consolehide.py` |
+
+**③ README 全面更新**（+619 字符）
+
+| 改动 | 内容 |
+|---|---|
+| 「4 个窗口」→「**1 个窗口**」 | 呼应 §18.1 的单窗口合并；并说明控制台自动隐藏 / `FATFISH_CONSOLE=1` / `FATFISH_MULTIWIN=1` 退回旧形态 |
+| 对话窗口示意图 | 补上 **↻ 一键重启**按钮与 **「⚙ 布局」栏**（顶栏 4 按钮 → 6 按钮）|
+| 「日志」页说明 | 改成「**真控制台**（自带滚动条、原样彩色、可框选、刷屏不卡）」 |
+| 命令表 | 新增 `/layout`（preset/split/detach/dock/reset）与 `/console`（on/off/status）|
+| 「规矩一」 | 从「别点运行窗口的 X」改为「收工敲 `quit`、重启点 ↻」（控制台默认已不可见）|
+
+**④ 重新打包并覆盖发布**
+
+| 项 | 值 |
+|---|---|
+| 内嵌文件数 | 38 → **41** |
+| 产物 | `FATPACKII.bat` |
+| 目标 Release | **`FforFeibafenqian`（v1.2.2）** —— 覆盖其资产（`--clobber`）|
+| 版本号 | 保持 **v1.2.2**（本次是「同一版本的修复重发」，不升号）|
+
+> 📌 本节也回答了 §18.7 的两条遗留：
+> 「`fatfish/` 仓库同步」→ ✅ 本次一并提交；
+> 「bat 层双保险」→ ⏳ 仍未上（须在程序停止后改 bat，否则 cmd 字节偏移会错位）。
+
+---
+
 > 📌 本文件由 `README.md` 更新记录章节剥离并重编而成。
 > 📌 新增记录请**直接追加在本文件末尾（第十三节之后）**，或按日期新建小节；README 不再承载更新记录。
-> 📌 最近一次增订：**2026-10-03**（第十五、十六、十七节）。
+> 📌 最近一次增订：**2026-10-03**（第十五 ~ 十八节；18.8–18.11 于当日深夜追记）。

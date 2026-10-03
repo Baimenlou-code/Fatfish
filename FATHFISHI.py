@@ -1049,6 +1049,68 @@ _STATUS_LOG     = os.path.join(_CONSOLE_DIR, "status.log")
 _CONSOLE_ONLINE = os.path.join(_CONSOLE_DIR, "console.online")
 
 
+# ============ [GUI-FIRST v1] 控制台窗口隐藏 ============
+#   目标：启动器一点，**只弹一个窗口**（对话窗口 / GUI），runtime 控制台藏到后面。
+#
+#   ★ 为什么不干脆用 pythonw.exe（真·无控制台）：
+#       · sys.stdout 会变成 None → 满地的 print() 直接崩；
+#       · stdin 同时失效 → 主循环里「stdin 关闭 → 退出」那条路会被误触发。
+#     所以走「**进程照旧挂在控制台上，只把那个窗口藏起来**」：
+#     stdout / stdin / input() 全部照常工作，对主程序零副作用。
+#
+#   ★ 什么时候才允许藏（缺一不可）：
+#       ① Windows 且拿得到**本进程自己的**控制台窗口（类名认得出来）；
+#       ② GUI **已经起来了**（窗口没起来就藏，等于把报错一起藏没了）；
+#       ③ 没有显式关掉这个行为。
+#     判定细节见 fatfish_core/consolehide.py —— 认不出窗口类名（例如跑在
+#     Windows Terminal 里）就一律不动手，宁可留着窗口也不误伤整个终端。
+#
+#   ★ 开关：
+#       FATFISH_CONSOLE=1  → 强制**不隐藏**（排障模式，等同旧的 runtime 窗口）
+#       FATFISH_CONSOLE=0  → 按默认逻辑藏
+#       运行期：/console on | off | status
+_CONSOLE_FORCE = os.environ.get("FATFISH_CONSOLE", "").strip().lower()
+_console_hidden = [False]
+
+
+def _console_autohide():
+    """GUI 起来之后，把控制台窗口藏掉。返回是否真的藏了。"""
+    if _CONSOLE_FORCE in ("1", "on", "true", "yes", "keep", "show", "开", "显示"):
+        print(paint("  🖥  控制台窗口保持可见 [console kept visible]"
+                    "（FATFISH_CONSOLE 已显式打开，排障模式）", BC, DIM))
+        return False
+    if _CONSOLEHIDE is None:
+        print(paint("  🖥  控制台隐藏不可用：consolehide 模块未加载，保持现状", BY, DIM))
+        return False
+    try:
+        if not _CONSOLEHIDE.available():
+            print(paint("  🖥  控制台窗口不可操作 [console not operable]，保持现状", BC, DIM))
+            print(paint("     · %s" % _CONSOLEHIDE.describe(), BK, DIM))
+            return False
+        if _CONSOLEHIDE.hide():
+            _console_hidden[0] = True
+            print(paint("  🖥  控制台已隐藏 [console hidden] —— 现在只留对话窗口一个界面",
+                        BC, DIM))
+            print(paint("     （想让控制台回来：敲 /console on；"
+                        "或启动前设 FATFISH_CONSOLE=1）", BK, DIM))
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _console_restore():
+    """把藏起来的控制台窗口请回来（退出时调，好让收尾信息看得见）。"""
+    if not _console_hidden[0] or _CONSOLEHIDE is None:
+        return False
+    try:
+        ok = _CONSOLEHIDE.show()
+        _console_hidden[0] = False
+        return ok
+    except Exception:
+        return False
+
+
 def _console_online():
     """状态台窗口是否在线（心跳文件新鲜）。"""
     if not STATUS_CONSOLE_ENABLED:
@@ -1080,7 +1142,15 @@ def _status_mirror(text, keep_in_main=False):
             keep_in_main = True
     else:
         keep_in_main = True
-    if keep_in_main or not _console_online():
+    # ★ [GUI-FIRST v1] **GUI 在线 → 过程信息只进 GUI「🧿 状态」面板**，
+    #   不再往控制台 print。合并后控制台窗口是隐藏的，print 等于把信息
+    #   扔进看不见的地方（且状态台已不再启动，_console_online() 恒为 False）。
+    _gui_live = False
+    try:
+        _gui_live = (_CW is not None and _CW.is_on())
+    except Exception:
+        _gui_live = False
+    if (keep_in_main or not _console_online()) and not _gui_live:
         print(body)
     # ★ [P1c] 同时送 GUI「🧿 状态」面板。
     #   与状态台窗口**双路并行**，互不影响：status.log 给状态台窗口，
@@ -1467,6 +1537,13 @@ try:
 except Exception:
     _CW = None
 
+# ★ [GUI-FIRST v1] 控制台窗口隐藏（只留 GUI 一个窗口）
+#   实现与安全边界见 fatfish_core/consolehide.py
+try:
+    from fatfish_core import consolehide as _CONSOLEHIDE
+except Exception:
+    _CONSOLEHIDE = None
+
 _WIN_MIRROR = None                 # stdout 镜像层（→ 窗口「日志」页）
 _WIN_QUEUE_MODE = [False]          # 是否已进入「轮询驱动」操作台模式
 _WIN_LAST_STREAM = [0.0]           # 最近一次流式结束时间（防同一条回复推两次气泡）
@@ -1704,6 +1781,11 @@ class _WinMirror(object):
                     self._buf.append(s)
                     if len(self._buf) > 2000:
                         del self._buf[:1000]
+                        # ★ [FIX 2026-10-03] 不再静默丢：插一条标记，
+                        #   日志页能看出「此处省略」，不至于把缺行误当完整。
+                        self._buf.insert(0, (
+                            "\x1b[90m… [WinMirror] 输出过密，日志页省略了最老的"
+                            " 1000 段缓冲（控制台原文仍完整）\x1b[0m\n"))
                 self._evt.set()          # ★ [P0-A] 有数据 → 立刻唤醒推送线程
             except Exception:
                 pass
@@ -2506,6 +2588,8 @@ def _signal_windows_shutdown():
 
 def _shutdown_all():
     """关掉所有附属窗口：对话窗口直接销毁；另两个写信号后等它们自己退。"""
+    _console_restore()          # ★ [GUI-FIRST v1] 把藏起来的控制台请回来，
+                                #   让收尾信息（退出码 / 报错）看得见
     try:
         import chat_window as _cw
         _cw.stop()                  # 让 Tk 在主循环里执行 destroy
@@ -2999,6 +3083,31 @@ def _agent_main():
                                 BC))
                 except Exception as _e:
                     print(paint("  ⚠️  /layout 执行失败：%s" % _e, BR, BOLD))
+                continue
+
+            # ---- /console：控制台窗口（GUI-First 合并后默认藏起来的那个）----
+            if user_input == "/console" or user_input.startswith("/console "):
+                _carg = user_input[8:].strip().lower()
+                if _CONSOLEHIDE is None:
+                    print(paint("  ⚠️  控制台控制不可用（consolehide 模块未加载）", BY, BOLD))
+                elif _carg in ("", "status", "状态"):
+                    print(paint("  🖥  控制台窗口：%s" % _CONSOLEHIDE.describe(), BC))
+                elif _carg in ("on", "show", "开", "显示"):
+                    _ok = _CONSOLEHIDE.show()
+                    _console_hidden[0] = False
+                    print(paint("  🖥  控制台窗口已唤回 [console shown]" if _ok
+                                else "  ⚠️  唤不回来（无控制台 / 认不出窗口类名）",
+                                BC if _ok else BY))
+                elif _carg in ("off", "hide", "关", "隐藏"):
+                    _ok = _CONSOLEHIDE.hide()
+                    if _ok:
+                        _console_hidden[0] = True
+                        print(paint("  🖥  控制台窗口已隐藏（GUI 照旧；"
+                                    "敲 /console on 可唤回）", BC))
+                    else:
+                        print(paint("  ⚠️  藏不了（无控制台 / 认不出窗口类名）", BY))
+                else:
+                    print(paint("     用法：/console on | off | status", BR, BOLD))
                 continue
 
             # ---- /jobs：查看后台长任务 ----
@@ -3516,6 +3625,26 @@ def _run_gui_first():
     _AGENT_EXIT_ON_WIN_CLOSE[0] = True
     _win_wire_output(quiet=False)
 
+    # ★ [GUI-FIRST v1] 窗口**已经起来了** —— 现在才轮到把控制台藏起来。
+    #   两个「顺序」都要顾：
+    #     ① 必须晚于建窗 —— 窗口没起来就藏，等于把报错一起藏没了；
+    #     ② 再等 0.8 秒 —— Tk 要等 mainloop 转起来才真正把窗口画到屏上，
+    #        藏太早会有一瞬「控制台没了、窗口还没出现」的空档。
+    def _console_hide_later():
+        try:
+            time.sleep(0.8)
+        except Exception:
+            pass
+        _console_autohide()
+
+    try:
+        _hide_t = threading.Thread(target=_console_hide_later,
+                                   name="fatfish-console-hide")
+        _hide_t.daemon = True
+        _hide_t.start()
+    except Exception:
+        _console_autohide()
+
     # ---- agent 循环进子线程（daemon=False：让它在主线程退出前把活干完）----
     _agent = threading.Thread(target=_agent_main, name="fatfish-agent")
     _agent.daemon = False
@@ -3524,6 +3653,12 @@ def _run_gui_first():
 
     # ---- 主线程专职跑 Tk（阻塞在这里，直到窗口关闭）----
     _CW.run_mainloop()
+
+    # ★ [GUI-FIRST v1] 用户**关掉了那个唯一的窗口** —— 这就是「主动退出」。
+    #   标记 clean → fatfish_runtime.bat 见到就直接 exit，连控制台窗口一起
+    #   收掉，不留一个「按任意键关闭」的尾巴。
+    global _quit_clean
+    _quit_clean = True
 
     # ---- 窗口关闭 → 唤醒 agent 退出 ----
     try:

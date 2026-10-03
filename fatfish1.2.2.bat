@@ -4,6 +4,29 @@ title 肥鱼启动器 v1.2.2 ^| FatFish Launcher v1.2.2 ^| 肥魚起動器 v1.2.
 cd /d "%~dp0"
 
 REM ============================================================
+REM  0) [GUI-FIRST v1] 先把自己搬进「传统控制台窗口」
+REM
+REM  为什么要有这一步：
+REM     Windows 11 的「默认终端应用程序」可能是 Windows 终端，
+REM     那时本窗口是 ConPTY —— GetConsoleWindow() 给回的是
+REM     PseudoConsoleWindow（终端宿主的内部伪窗口），**主程序没法把
+REM     它藏掉**，「启动后只剩一块对话窗口」就做不到。
+REM
+REM     实测（本机）：
+REM       CREATE_NEW_CONSOLE / 默认宿主 → 'PseudoConsoleWindow'  不可隐藏
+REM       conhost.exe 显式启动          → 'ConsoleWindowClass'   可隐藏 ✓
+REM     所以这里先让 conhost.exe 把自己重新拉起来，换到传统控制台窗口里
+REM     再往下走。一次即可（靠 FISH_CONHOST 防循环）。
+REM
+REM  不要这个行为：启动前 set FATFISH_NO_CONHOST=1
+REM ============================================================
+if not defined FATFISH_NO_CONHOST if not defined FISH_CONHOST if exist "%SystemRoot%\System32\conhost.exe" (
+    set "FISH_CONHOST=1"
+    start "" "%SystemRoot%\System32\conhost.exe" cmd /k "%~f0"
+    exit
+)
+
+REM ============================================================
 REM  1) 检查 Python
 REM ============================================================
 where python >nul 2>nul
@@ -80,26 +103,29 @@ REM     start 的第一个引号参数是【窗口标题】，其后才是要执
 REM     若命令内部再含引号（如 call "路径"），必须用额外的外层引号
 REM     把整条命令括起来，否则含空格的路径会被截断 → 新窗口闪退。
 REM ============================================================
-set "FISHWIN=FatFish Runtime v1.2.2"
-
+REM ============================================================
+REM  5) 启动（[GUI-FIRST v1] 就**在本窗口**里跑）
+REM
+REM  旧做法： start "" cmd /k "fatfish_runtime.bat"
+REM           → 另开一个 runtime 控制台窗口（再加监控器 + 状态台 = 一堆窗口）
+REM  新做法： call "fatfish_runtime.bat" —— 同一个窗口往下跑；主程序起来后
+REM           会把本控制台窗口藏起来，界面上只剩一块对话窗口。
+REM  需要旧的多窗口形态：启动前 set FATFISH_MULTIWIN=1
+REM ============================================================
 echo.
-echo 🐟 正在新窗口中启动肥鱼 v1.2.2... ^| Starting FatFish v1.2.2 in a new window... ^| 新しいウィンドウで肥魚 v1.2.2 を起動中... ^| 새 창에서 팻피시 v1.2.2 기동 중...
-echo    主程序运行窗口标题 [runtime window title]：%FISHWIN%
-echo    主程序窗口独立运行：结束后需按任意键才关闭 [runtime window is standalone: press any key to close after it ends]
+echo 🐟 正在启动肥鱼 v1.2.2... ^| Starting FatFish v1.2.2... ^| 肥魚 v1.2.2 を起動中... ^| 팻피시 v1.2.2 기동 중...
+echo.
+echo    单窗口模式：界面上只会出现一块对话窗口 [single-window mode]
+echo    本控制台随后会自动隐藏（在窗口里敲 /console on 可唤回）
+echo    [this console will be hidden; type /console on to bring it back]
 echo.
 
-REM Launch the main program in a standalone window
-REM Best practice: start "" cmd /k "path" -- the first "" is the window title placeholder,
-REM wrap the path in its own pair of quotes and do not nest quotes or && inside the command,
-REM this way a path with spaces will not be truncated and the new window will not flash-close.
-start "" cmd /k "%~dp0fatfish_runtime.bat"
+call "%~dp0fatfish_runtime.bat"
 
 REM ============================================================
-REM  6) 启动器收尾
-REM     默认：启动器窗口保留，方便你看输出；按任意键再关。
-REM     若想启动完就自动关，把下面的 pause 删掉、保留 exit 即可。
+REM  6) 收尾
+REM     [GUI-FIRST v1] 同窗口运行，这里不再 pause：
+REM       · 用户主动退出 → runtime.bat 里的 exit 已把窗口一起关掉；
+REM       · 其它情况     → runtime.bat 自己会 pause 等按键。
 REM ============================================================
-echo [完成] 主程序已在新窗口启动 ^| [Done] Runtime launched in the new window.
-echo 按任意键关闭本启动器窗口 [press any key to close this launcher window]...
-pause >nul
-exit
+exit /b %errorlevel%
