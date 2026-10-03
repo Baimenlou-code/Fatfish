@@ -37,10 +37,9 @@ No programming knowledge needed — just follow along 👇
 | 🏠 **默认工作台 = 启动根目录** | 默认作业区不再是 `workspace/`，但作业约定仍是「尽量把产出写在 `workspace/` 里」/ default workspace root changed | 第二十二章 |
 | 🚀 **版本号 `v1.2.1`** | 48 处 / 6 个文件；启动器改名 `fatfish1.2.1.bat`（旧名留 3 行转发壳）/ version bump | 第二十二章 |
 
-> 📦 完整编年史见 `oldver/CHANGELOG.md` 的**第十一 ~ 十四节**（09-24 / 09-25 / 间歇期 / 10-02）。
-> Full chronicle: chapters 11–14 of `oldver/CHANGELOG.md`.
+> 📦 完整编年史由**开发者单独存档**（不随安装器分发）；本 README 只记录**文档层面**的变化。
 >
-> 下面这张表是**第 2 版**（`rev.2`）当年与上一版旧文档的对比，保留原样作为历史痕迹。
+> 下面这张表是**第 2 版**当年与更早一版文档的对比，保留原样作为历史痕迹。
 > The table below is the original rev.2 comparison, kept as-is for the record.
 
 | 项目 / Item | 旧文档 / Old Doc | 新文档 / New Doc |
@@ -55,24 +54,21 @@ No programming knowledge needed — just follow along 👇
 | 已知问题 / Known issues | 没写 / not documented | ✅ 实测发现 4 条 / 4 findings |
 | 章节编号 / Chapter numbers | 「三步」下面却有第 3、4 步 ❌ | ✅ 编号已理顺 / renumbered |
 
-### 🆕 2026-10-03 补记：运行窗口是生命线 / Addendum — Never Close the Runtime Window
+### 🆕 2026-10-03 补记：运行窗口是生命线 + 去本机化 / Addendum
 
-- 新增第三章小节「反例：点运行窗口的 X = 四个窗口一起死」与第十二章「提醒 7」。
+- 新增第三章小节「反例：点运行窗口的 X = 四个窗口一起死」与第十二章「提醒 6」。
   实测：**6 个进程共用同一个控制台**，点 X 触发 `CTRL_CLOSE_EVENT` 广播 → 主程序阵亡 → 其余窗口殉葬。
-- 一句话结论：**嫌它碍眼就最小化，收工敲 `quit`，永远别点 X。**
+  一句话结论：**嫌它碍眼就最小化，收工敲 `quit`，永远别点 X。**
+- 🧹 **去本机化**：清掉了正文里**只在一台机器上成立**的内容 —— 绝对路径、具体 PID 名单、
+  个人归档目录与当时的统计数字；相关证据改为「示意」写法，并把可复现的做法留在原地。
+- 🔧 同步修正三处**与实现不符**的描述：默认工作台（= **启动根目录**，非 `workspace/`）、
+  `.gitignore` 的忽略范围、`§4.1 / §4.2` 的计数与条目。
 
 ### 📌 更新记录 / Changelog
 
-> 📦 **本节的更新记录已于 2026-09-20 剥离独立存放。**
-> 完整编年史（含 README 从未记录的原型阶段与 `v1.0.x` 阶段）见：
-> **`oldver/CHANGELOG.md`**
-> The changelog has been moved out and consolidated into `oldver/CHANGELOG.md`.
-> 本节原有 `rev.2` ~ `rev.3.1` 全部条目已完整并入该文件，无遗漏。
->
-> 📌 **2026-10-02 补记**：此后又添了四节 —— 第十一节（09-24 QQ 桥接与自由跑）、
-> 第十二节（09-25 唤醒修复 / 群聊直通 / 权限档位 / 媒体落地）、第十三节（09-27 ~ 10-01 间歇期）、
-> 第十四节（10-02 装备升级）。本 README 新添的**第二十 ~ 二十二章**即第十四节的展开版。
-> Four more chapters (11–14) now cover 2026-09-24 → 2026-10-02.
+> 📦 **本项目的完整更新记录由开发者单独存档，不随安装器分发。**
+> 本 README 只记录**文档自身**的修订（当前：第 3.5 版 + 2026-10-03 补记）。
+> The full project changelog is kept by the developer and is **not shipped** with the installer.
 
 ---
 
@@ -275,21 +271,21 @@ launch.py（启动枢纽：一个主进程 + 两个附属窗口）
 > 现在窗口会比对 **PID**：只认「自己服务的那一个主程序」写的信号；
 > 旧格式信号（无 PID）仍按时间戳兼容。
 >
-> 之所以要多一个 `main.pid`：本机 `venv\Scripts\python.exe` 是**转发壳**，
+> 之所以要多一个 `main.pid`：Windows 下 `venv\Scripts\python.exe` 是**转发启动器**，
 > `launch.py` 拿到的 PID 是壳的，而写信号的是壳的子进程（真身）——
 > 不比对这个文件，正常退出反而会被判成「外来信号」。
 
 > 🚨 **反例：直接点运行窗口右上角的 X = 四个窗口一起死（2026-10-03 实测）**
 >
-> 运行窗口**不是「外壳」，它是整个进程组的控制台宿主**。实测（附着到该控制台、枚举其全部成员）：
+> 运行窗口**不是「外壳」，它是整个进程组的控制台宿主**。附着到该控制台、枚举其全部成员（示意，PID 各机不同）：
 >
 > ```
-> [runtime 窗口] PID=2224   cmd.exe   cmd /k "fatfish_runtime.bat"    ← 宿主就是它
->    ├ PID=9824    python   python "E:\FATFISH\launch.py"           ← 启动枢纽
->    ├ PID=34544   python   "E:\FATFISH\launch.py"                  ← （venv 壳外的真身）
->    ├ PID=20780   python   venv\Scripts\python.exe FATHFISH.py     ← 主程序（转发壳）
->    ├ PID=35088   python   FATHFISH.py                              ← ★ 主程序真身 =「我」
->    └ PID=19064   python   .fatfish_tmp\snippet_xxx.py              ← 连探针都在里面
+> [runtime 窗口] PID=xxxxx  cmd.exe  cmd /k "fatfish_runtime.bat"   ← 宿主就是它
+>    ├ PID=xxxxx  python  <程序目录>\launch.py                      ← 启动枢纽
+>    ├ PID=xxxxx  python  <程序目录>\launch.py                      ← （壳外的真身）
+>    ├ PID=xxxxx  python  venv\Scripts\python.exe FATHFISH.py       ← 主程序（转发壳）
+>    ├ PID=xxxxx  python  FATHFISH.py                               ← ★ 主程序真身 =「我」
+>    └ PID=xxxxx  python  .fatfish_tmp\snippet_xxx.py               ← 连工具探针都在里面
 > ```
 >
 > **六个进程共用同一个控制台。** 所以点 X ≠ 杀一个父进程，而是**关闭一个控制台** ——
@@ -337,11 +333,11 @@ launch.py（启动枢纽：一个主进程 + 两个附属窗口）
 
 ## 四、文件都是干啥的？ / File Overview
 
-### 4.1 一级文件（25 个 / 常驻）/ Top-level files (25)
+### 4.1 一级文件（24 个 / 常驻）/ Top-level files (24)
 
-> 口径：根目录**常驻**文件；`_fatfish_pid.txt` 属运行时产物（退出即删），不计入。
-> 安装器 `FATPACKII.bat` 与生成器 `make_fatpack.py` 于 2026-10-02 **重建并回到根目录**
-> （内嵌清单扩到 31 项，见 §8.3 与第十二章「问题 5」）。
+> 口径：**源码仓库 / 开发机**视角的根目录常驻文件；`_fatfish_pid.txt` 属运行时产物（退出即删），不计入。
+> ⚠️ 用 `FATPACKII.bat` **全新安装**不会得到上面全部 24 个 —— 安装器实际打包 **31 项**（见 §8.3），
+> 其中 `make_fatpack.py`（安装器生成器）属**仓库件**，安装器**不含**。
 
 | 文件 / File | 大小 / Size | 行数 / Lines | 干啥的 / Purpose |
 |---|---|---|---|
@@ -364,43 +360,36 @@ launch.py（启动枢纽：一个主进程 + 两个附属窗口）
 | `launch.py` | 6.2 KB | 157 | **启动枢纽**（拿 PID、拉监控器、等收尾）/ launch hub |
 | `fatfish_runtime.bat` | 6.0 KB | 117 | **运行窗口**（探语言、取本窗口 PID、跑 launch.py）/ runtime window |
 | `common.py` | 4.8 KB | 147 | **公共基础件**（时间戳 / 日期分层目录，单一事实来源）/ shared utils |
-| `部署记录_20261002.md` | 4.6 KB | 118 | 最近一次部署的**交接单**（改了什么 / 怎么退）/ deploy handover |
 | `fatfish_lang.bat` | 3.9 KB | 89 | **语言探测器**（四级降级 → `FISH_LANG`）/ language probe |
 | `.env` | 2.2 KB | 65 | 你的密钥配置（🔴 **绝不要分享 / 上传**）/ your keys |
-| `README.md` | 146.7 KB | 2489 | 就是本文件（第 3.5 版 · 2026-10-02；会随文档更新变动）/ this file |
+| `README.md` | 142.5 KB | 2457 | 就是本文件（第 3.5 版 · 2026-10-02；会随文档更新变动）/ this file |
 | `fatfish1.1.1.bat` | 593 B | 12 | 旧名**转发壳**（3 行转发，老快捷方式仍可用）/ legacy forwarder |
 | `.gitignore` | 224 B | 15 | 防误传名单（`.env` / 日志 / 运行时产物）/ ignore list |
 
-> 📌 **`fatfish_core/`**（10 个模块 / 1856 行）是主程序拆出的功能包，相当于「第 24 个成员」，
+> 📌 **`fatfish_core/`**（10 个模块 / 1856 行）是主程序拆出的功能包，相当于「多一个成员」，
 > 但它是个目录、不是文件 —— 详见**第二十二章**。
 > 📌 **安装器已重建**：`FATPACKII.bat` 于 2026-10-02 重新打包，内嵌清单由 17 项扩到 **31 项**
 > （补上 `chat_window.py` / `stream_core.py` / `fatfish_core/` 整个子包），
 > 并修好了「载荷不支持写子目录」的缺陷 —— 详见 §8.3 与第十二章「问题 5」。
-> 📌 四份专题文档（`切换API说明.md` / `双人核验模式.md` / `核验与报批规则修订_20260919.md` /
-> `设置说明.md`）已随 `oldpackmd/` 归档到 `oldver/_cleanup_20261002/dirs/oldpackmd/`；
+> 📌 早期那几份专题文档（切换 API / 双人核验 / 核验与报批规则 / 设置说明）**已不再随包分发**，
 > 核心内容早已并入本 README 第十五~十八章。
 > 📌 `_fatfish_pid.txt`（7 B）记 runtime 窗口 PID，只在运行时短暂存在。
 
-### 4.2 一级目录（11 个）/ Top-level dirs (11)
+### 4.2 一级目录（8 个）/ Top-level dirs (8)
 
 | 目录 / Dir | 干啥的 / Purpose | 会被 git 忽略吗 |
 |---|---|---|
-| `workspace/` | **工作台（默认作业区）**：中间脚本 / 临时数据 / 实验产物都放这儿 / the sandbox & default area | ❌ 不忽略 |
+| `workspace/` | **作业区（建议产出放这儿）**：中间脚本 / 临时数据 / 实验产物 / the suggested sandbox | ✅ 忽略 |
 | `fatfish_core/` | ★ **功能包**：10 个模块 / 1856 行，2026-10-02 从主程序拆出（第 22 章）/ the split-out package | ❌ 不忽略 |
-| `fatfish/` | **git 仓库工作区**：主程序 + 文档的完整副本（可直接运行；`main` 分支的检出点）/ the git work tree | ❌ 不忽略 |
 | `logs/`（年 → 月 → 日） | **主程序**的聊天日志与执行输出 / chat & exec logs | ✅ 忽略 |
 | `generated_code/`（年 → 月 → 日） | 主程序自动存下的代码 / saved code | ✅ 忽略 |
-| `_backup/` | 根一级文件被改前的**自动备份**（按需自建）/ auto backups | ❌ 不忽略 |
-| `.fatfish_tmp/` | 跑 Python 时的临时脚本 + 后台任务登记 / temp scripts & job registry | ❌ 不忽略 |
+| `_backup/` | 根一级文件被改前的**自动备份**（按需自建）/ auto backups | ✅ 忽略 |
+| `.fatfish_tmp/` | 跑 Python 时的临时脚本 + 后台任务登记 / temp scripts & job registry | ✅ 忽略 |
 | `__pycache__/` | Python 字节码缓存 / bytecode cache | ✅ 忽略（`*.pyc`） |
 | `venv/` | Python 虚拟环境（安装器创建）/ virtualenv | ❌ 不忽略 |
-| `oldver/` | 归档：历代版本 + **`CHANGELOG.md` 全量更新记录** + `_cleanup_20261002/` / archive & changelog | ✅ 忽略 |
-| `_ssh_setup/` | SSH 密钥与配置（2026-09-20 建立）/ ssh keys & config | ❌ 不忽略 |
 
-> 📌 **2026-10-02 清扫**：`agents/` / `sub/` / `chat_logs/` / `fatfish/` / `oldpackmd/` / `workspaceX/`
-> 六个目录已整批移入 `oldver/_cleanup_20261002/dirs/`（**未删除任何文件**，带回滚命令）。
-> 📌 忽略规则以 `.gitignore` 为准（`.env` / `logs/` / `generated_code/` / `__pycache__/` /
-> `*.pyc` / `chat_logs/` / `workspaceX/` / `oldver/`）。
+> 📌 忽略规则以 `.gitignore` 为准（`.env` / `logs/` / `generated_code/` / `__pycache__/` / `*.pyc`，
+> 以及运行时目录 `workspace/` / `_backup/` / `.fatfish_tmp/`）。
 
 ## 五、怎么跟肥鱼说话？ / How to Talk to FatFish
 
@@ -655,7 +644,7 @@ launch.py（启动枢纽：一个主进程 + 两个附属窗口）
 
 ### 5.6 开工自检面板：开局即知情 / Boot Report
 
-每次启动，肥鱼先采集一份**运行环境快照**（纯本机、只读、不联网），然后分两处用：
+每次启动，肥鱼先采集一份**运行环境快照**（纯本地、只读、不联网），然后分两处用：
 
 | 去处 | 内容 |
 |---|---|
@@ -671,8 +660,9 @@ launch.py（启动枢纽：一个主进程 + 两个附属窗口）
 
 ## 六、工作台（沙盒）机制 / The Workspace (Sandbox)
 
-**工作台 = 肥鱼能自由读写的那个文件夹**，默认是程序目录下的 `workspace/`。
-**Workspace = the folder FatFish can freely read/write**, defaults to `./workspace`.
+**工作台 = 肥鱼能自由读写的那个文件夹**，默认是**程序启动根目录**（即 `FATHFISH.py` / `.bat` 所在目录）。
+**Workspace = the folder FatFish can freely read/write**, defaults to the **start-up root**.
+> 📌 作业约定：日常产出（中间脚本、临时数据、实验产物）建议写在 `workspace/` 子目录里，保持根目录整洁。
 
 ### 6.1 三条安全设计 / Three Safety Designs
 
@@ -699,7 +689,7 @@ launch.py（启动枢纽：一个主进程 + 两个附属窗口）
 
 | 变量 / Var | 作用 / Effect | 默认值 |
 |---|---|---|
-| `WORKSPACE_DIR` | 覆盖默认工作台的路径 / override default workspace | `<程序目录>/workspace` |
+| `WORKSPACE_DIR` | 覆盖工作台根目录 / override workspace root | 空（= 启动根目录） |
 
 ---
 
@@ -763,7 +753,7 @@ launch.py（启动枢纽：一个主进程 + 两个附属窗口）
 
 这是最有趣的一块。安装器 = **脚本 + 内嵌压缩包**，同一个文件。
 
-现在目录里只有一个安装器 `FATPACKII.bat`（II 版）；早期的 `FATPACK.bat` / `FATPACKI.bat` 已归档进 `oldver/_cleanup_20261002/dirs/oldpackmd/`。
+本项目的安装器就是 `FATPACKII.bat`；更早的 `FATPACK.bat` / `FATPACKI.bat` 已废弃（不再分发）。
 
 | 安装器 / Installer | 内嵌内容 / Payload | 状态 / Status |
 |---|---|---|
@@ -1011,7 +1001,7 @@ ws_run_cmd("dir")  /  ws_run_python(code)
 
 ## 十二、⚠️ 已知问题与待办 / Known Issues & TODOs
 
-以下都是我这次**实测发现的**，不是猜测：
+以下是开发过程中**实测发现的**，不是猜测：
 
 ### 🟢 问题 1（已解决）：安装器曾内嵌过期文件
 
@@ -1057,7 +1047,7 @@ ws_run_cmd("dir")  /  ws_run_python(code)
 
 **症状**：`FATPACKII.bat` 的载荷是打包那一刻的快照，曾停在 v1.1.1 那一代 ——
 `chat_window.py` / `stream_core.py` / `status_console.py` / `fatfish_core/` 一个都没进去，
-装完启动必然 `ModuleNotFoundError` 闪退；且 10-02 主程清扫后安装器与生成器都不在根目录。
+装完启动必然 `ModuleNotFoundError` 闪退。
 
 **修法（2026-10-02 完成）**：
 
@@ -1079,17 +1069,17 @@ ws_run_cmd("dir")  /  ws_run_python(code)
 ### 🟢 提醒 2：备份会膨胀
 
 `_backup/` 的规则是「根一级文件**每次被改前都全量留档**」，所以只要频繁改
-`README.md` / `FATHFISH.py` 这类文件，备份就会快速堆积（迭代最猛的那一晚，备份数量冲到过上百份）。
+`README.md` / `FATHFISH.py` 这类文件，备份就会快速堆积（改得越勤、堆得越快）。
 **建议偶尔按「每文件保留最近几份」清一次** —— 清理方法很简单，就是在工作台里删掉过期的 `.bak`：
 文件名里带时间戳（`原文件名.年月日_时分秒_微秒.bak`），按时间排序留新的即可。
 
 ### 🟢 提醒 3：venv 是可选的
 
-`FATPACKII.bat` 会自动创建 `venv/`（本机根目录下就有一个）。
+`FATPACKII.bat` 会自动创建 `venv/`。
 但 `fatfish1.2.1.bat` 对**没有 venv** 的情况完全容错：`venv/` 与 `.venv/` 都不存在时
 就用全局 Python 跑，不会报错。
 
-> ⚠️ 本机实测：`venv\Scripts\python.exe` 是个**转发壳** —— 每次执行都会再派生出
+> ⚠️ **Windows 上 `venv\Scripts\python.exe` 是个「转发启动器」** —— 执行它会再派生出
 > 一个系统 Python 子进程。所以按 PID 认进程时（例如认主程序「真身」），
 > 要留意「壳」与「真身」是两个 PID（详见 §21.4 退出信号那一条）。
 
@@ -1106,7 +1096,7 @@ ws_run_cmd("dir")  /  ws_run_python(code)
 
 ✅ **新取法：重定向法** —— `powershell ... > 临时文件`，让 PowerShell 报出
 「自己的父进程 PID」。重定向由 cmd 自身处理文件句柄，PowerShell 由本窗口**直接**启动，
-所以父进程就是 runtime cmd 本体（已用「真身 PID 对照」实测验证：探测值 == 真身 PID）。
+所以父进程就是 runtime cmd 本体（用「真身 PID 对照」验证过：探测值 == runtime 窗口 PID）。
 降级链：`Get-CimInstance` → `Get-WmiObject` → 窗口标题反查（仅传统终端有效）→ 写 `0`。
 
 > 另外，`boot_report.py` 的自检也同步改了判定语义：它**不再**拿这个 PID 去和
@@ -1121,31 +1111,22 @@ ws_run_cmd("dir")  /  ws_run_python(code)
 | ⚠️ **`patch_stream.py --revert` 已失效** | 流式函数体搬进了 `fatfish_core/`，该脚本现在只会删掉那段说明注释。要撤销流式改造，请用整体备份（见第二十二章） |
 | ⚠️ **`_BG_PROMPT_POS` 要手动同步** | 主程序里 2 处赋值后面都跟着 `_sync_qqmode_pos()`；以后新增赋值点也要跟着加，否则 QQ 看门狗会看到过期的提示符位置 |
 
-### 🟢 提醒 6：根目录的中间态备份已归档（2026-10-02）
-
-根目录曾被中间态备份堆到 **38 个文件**，其中 14 个是 `.pre_*/`.bak（合计 1.59 MB）。
-现已全部**移动**（非删除）到 **`oldver\_root_bak_cleanup_20261002\`**，
-根目录只剩 25 个常驻程序文件（2026-10-02 晚重建安装器与生成器后为 26 个）。归档清单与**一键还原命令**见该目录下的 `MANIFEST.md`。
-
-> 其中 `FATHFISH.py.pre_split_20261002_172636.bak.pre_apply`（242,414 B）是拆分过程中留下的
-> 中间态 —— **拆分回滚点用的是不带 `.pre_apply` 的那份**，这一份可以放心删。
-
-### 🟢 提醒 7：运行窗口是「生命线」，别点它的 X（2026-10-03 实测）
+### 🟢 提醒 6：运行窗口是「生命线」，别点它的 X（2026-10-03）
 
 `fatfish_runtime.bat` 那个窗口（标题 `🐟 肥鱼 v1.2.1 ｜ FatFish`）**不是外壳，是整个进程组的控制台宿主** ——
 主程序、`launch.py`、对话窗口都挂在它身上。点右上角 X = 关闭整个控制台，Windows 向其成员广播
 `CTRL_CLOSE_EVENT`（不可忽略，约 5 秒后强制终止），**四个窗口全灭**：
 主程序被广播打死 → 对话窗口（Tk 线程）随之消失 → 状态台 / 监控器按「盯主程序 PID」的逻辑殉葬。
 
-实测证据 —— 同一控制台里的 6 个成员：
+同一控制台里的 6 个成员（示意，PID 各机不同）：
 
 ```
-PID=2224   cmd.exe   cmd /k "fatfish_runtime.bat"        ← 宿主（就是它）
-  ├ PID=9824    python  launch.py
-  ├ PID=34544   python  launch.py
-  ├ PID=20780   python  venv\Scripts\python.exe FATHFISH.py
-  ├ PID=35088   python  FATHFISH.py                      ← 主程序真身 =「我」
-  └ PID=19064   python  .fatfish_tmp\snippet_xxx.py
+PID=xxxxx  cmd.exe  cmd /k "fatfish_runtime.bat"     ← 宿主（就是它）
+├ PID=xxxxx  python  launch.py
+├ PID=xxxxx  python  launch.py
+├ PID=xxxxx  python  venv\Scripts\python.exe FATHFISH.py
+├ PID=xxxxx  python  FATHFISH.py                     ← 主程序真身 =「我」
+└ PID=xxxxx  python  .fatfish_tmp\snippet_xxx.py
 ```
 
 - ✅ **嫌它碍眼 → 最小化**；✅ **收工 → 敲 `quit`**（干净退出，窗口一起收）
@@ -1471,7 +1452,7 @@ set FATFISH_VERIFY_MOCK=revise && set VERIFY_MODE=all && python FATHFISH.py
 | **误报**（不该搜却搜） | 「现在双人核验是可开关的模式吗」→ 命中「现在」+「吗」| 搜回一堆无关内容，污染上下文 |
 | **漏报**（该搜却没搜） | 「最新的 DeepSeek 模型是什么」→ 句尾无 `？`/`吗` | 该查实时信息时没查，回答可能过时 |
 
-实测误报率约 **42%** —— 因为「现在」「当前」在中文里多数是**问自身状态**，不是查外部世界。
+小样本自测里误报率相当高（四成上下）—— 因为「现在」「当前」在中文里多数是**问自身状态**，不是查外部世界。
 
 `/net ai` 模式下，联网前先请审核 AI 独立判断：
 
@@ -1483,7 +1464,7 @@ set FATFISH_VERIFY_MOCK=revise && set VERIFY_MODE=all && python FATHFISH.py
                      └─ search  ──▶ 🔍 用改写后的关键词搜索
 ```
 
-**实测效果**（12 条人工标注测试集）：
+**小样本自测效果**（开发期 12 条样例，仅供参考）：
 
 | 方案 | 准确率 | 正确搜 | 正确跳过 |
 |---|---|---|---|
@@ -2100,7 +2081,7 @@ QQ 群 ──► NapCat ──► qq_bridge（旁路进程） ──► 写 inbo
 
 ### 20.6 两条运维禁忌 / Two Caveats
 
-1. **只在一个实例里 `/qq on`** —— 本机曾真的同时跑过两个 `FATHFISH.py`，
+1. **只在一个实例里 `/qq on`** —— 同时跑两个 `FATHFISH.py` 时，
    两个都开跟随会抢 `inbox/` 与心跳，可能出现重复回复。
 2. **改代码要重启**：QQ 模块是静态注入的；桥接改 `config.json` 要重启桥接。
 
@@ -2189,9 +2170,9 @@ QQ 直通仍是整段发送。
   仍由 `_mark_round_end()` 补一行，不会重复也不会丢
 - **退出信号带会话身份**：`.fatfish_tmp/shutdown.signal` 原先**没有任何身份信息**，
   任何 fatfish 实例退出都会把附属窗口一起关掉（2026-10-02 真实事故）。现在信号带上主程序 PID，
-  主程序开机另写 `.fatfish_tmp/main.pid`（真身 PID —— 本机 venv 的 `python.exe` 是转发壳，
+  主程序开机另写 `.fatfish_tmp/main.pid`（真身 PID —— Windows 下 venv 的 `python.exe` 是转发启动器，
   `launch.py` 拿到的是壳的 PID），窗口只认「自己服务的那一个主程序」写的信号；
-  旧格式信号（无 PID）仍按时间戳兼容。详见 `oldver/CHANGELOG.md` §14.3c
+  旧格式信号（无 PID）仍按时间戳兼容。
 
 ---
 
@@ -2253,23 +2234,23 @@ FATHFISH.py   4848 行 / 242.4 KB  ──拆分──►  3303 行 / 169.6 KB   
 
 ### 22.5 回滚 / Rollback
 
-> 📦 这些回滚点在 **2026-10-02 根目录清理**时统一归档到了
-> `oldver\_root_bak_cleanup_20261002\`（只挪位置，没删文件）。
+肥鱼**每次改动根一级文件前都会自动留档**（见 §6.2），所以回滚不需要特殊准备 ——
+从 `_backup/` 里挑出改动前的那一份拷回去即可：
 
 ```bat
-:: 回到拆分前（4848 行）
-copy /Y "E:\FATFISH\oldver\_root_bak_cleanup_20261002\FATHFISH.py.pre_split_20261002_172636.bak" "E:\FATFISH\FATHFISH.py"
-:: 仅回滚第二批（三项拆分）
-copy /Y "E:\FATFISH\oldver\_root_bak_cleanup_20261002\FATHFISH.py.pre_split2.bak" "E:\FATFISH\FATHFISH.py"
-:: 仅回滚「默认工作台改根目录」
-copy /Y "E:\FATFISH\oldver\_root_bak_cleanup_20261002\FATHFISH.py.pre_wsroot.bak" "E:\FATFISH\FATHFISH.py"
-copy /Y "E:\FATFISH\oldver\_root_bak_cleanup_20261002\workspace.py.pre_wsroot.bak" "E:\FATFISH\workspace.py"
+:: 在程序根目录（.bat 所在目录）执行
+:: 1) 看看有哪些历史副本（按时间倒序，新的在上面）
+dir /O-D "_backup\FATHFISH.py.*.bak"
+
+:: 2) 挑一份拷回去（把 <时间戳> 换成上一步看到的那个）
+copy /Y "_backup\FATHFISH.py.<时间戳>.bak" "FATHFISH.py"
 ```
 
-> `fatfish_core/` 留着无害 —— 不 import 就没影响。
+> 💡 `_backup/` 里存的是**全量副本**，命名是 `原文件名.年月日_时分秒_微秒.bak`。
+> ⚠️ 反过来说：**越晚的备份才包含越新的功能** —— 拿很早的备份覆盖，会一并丢掉那之后的所有改动。
 >
-> ⚠️ 这些回滚点**早于** 2026-10-02 晚间的两项改动（`roundtime` 落款、退出信号 PID 校验），
-> 拿它们回滚会一并丢掉那两项；只想退那两项，用各自的补丁脚本 `--revert`。
+> 🔁 想整体退回**出厂状态**，最省事的办法不是挑备份，而是**重新跑一遍安装器**
+> （`FATPACKII.bat`），让随包分发的原始版本覆盖回去。
 
 ---
 
@@ -2332,7 +2313,6 @@ FatFish/
 ├── fatfish_lang.bat         ← 语言探测（四级降级）
 ├── launch.py                ← 启动枢纽（拿 PID / 拉监控器 + 状态台）
 ├── README.md                ← 本文件（第 3.5 版）
-├── 部署记录_20261002.md      ← 最近一次部署的交接单（改了什么 / 怎么退）
 ├── .env                     ← 你的密钥（🔴 别外传）
 ├── .gitignore               ← 防误传名单
 ├── _fatfish_pid.txt         ← runtime 窗口 PID（运行时生成；启动时重写、退出即删）
@@ -2348,51 +2328,40 @@ FatFish/
 │   ├── setappl.py           ←   /set 各 applier（75 行）
 │   ├── envutil.py           ←   环境变量清洗与类型转换（54 行）
 │   └── __init__.py
-├── fatfish/                 ← 📦 git 仓库工作区（主程序 + 文档的完整副本，可直接运行）
 ├── workspace/               ← 🏠 工作台沙盒（日常产出都放这儿）
 ├── logs/                    ← 归档区（年 → 月 → 日：聊天日志 / 执行输出）
 ├── generated_code/          ← 肥鱼自动存的代码
 ├── _backup/                 ← 根一级文件的自动备份（按需自建）
 ├── .fatfish_tmp/            ← 临时脚本 + 后台任务登记
 ├── __pycache__/             ← 字节码缓存
-├── venv/                    ← Python 虚拟环境（安装器创建）
-├── _ssh_setup/              ← SSH 密钥与配置
-└── oldver/                  ← 归档：历代版本 + CHANGELOG.md + _cleanup_20261002/
+└── venv/                    ← Python 虚拟环境（安装器创建）
 ```
 
+
+> 📌 上表是**源码仓库 / 开发机**视角；用 `FATPACKII.bat` 全新安装只会得到其中 **31 项**：
+> 15 个 `.py` + 4 个 `.bat` + `fatfish_core/` 10 个模块 + `README.md` + `.gitignore`。
+> `make_fatpack.py` 属仓库件，安装器不含。
 
 ---
 
 ## 附录 C：本版文档的核对结论 / Appendix C: Verification Log
 
-本版 README 的所有架构描述都来自**逐文件通读 + 实测验证**，不是猜测：
+本 README 的架构描述均来自**逐文件通读 + 实测验证**，不是猜测。下面是「文档说法 ↔ 怎么核实」的对应关系（示例）：
 
 | 结论 / Conclusion | 怎么得出的 / How Verified |
 |---|---|
-| 启动链路四层 | 通读 `fatfish1.2.1.bat` / `fatfish_runtime.bat` / `launch.py` / `fatfish_watcher.py` |
-| `.hex` 是纯冗余副本（已删除） | 全项目搜索引用 + 核对安装器内嵌清单 + 解码后与 `.bat` 逐字节比对 |
-| `FATPACK.bat` 重装前内嵌 8 个文件、4 个过期 | 抓出载荷字典 → 解码 → 与现场文件比对 |
-| `FATPACK.bat` 重装后内嵌 12 个全一致 | 抽载荷 → 沙箱两遍实跑 → 逐字节比对全部通过 |
-| 两个安装器内容等价 | 比对内嵌清单与主程序 base64 完全相同 |
-| 所有常量上限数值 | 逐文件通读源码顶部常量区 |
-| 编码/行尾/BOM 状态 | 二进制读入逐文件检测（全部 UTF-8 无 BOM，bat 为 CRLF，`FATPACK.bat` 为 LF）|
-| 归档目录结构 | 遍历 `logs` 与 `generated_code`，按文件名模式归类统计 |
-| `_fatfish_pid.txt` 语义 | 通读 `fatfish_runtime.bat`；并用「真身 PID 对照」实验验证重定向法（探测值 == 真身 cmd PID）|
-| 计时器行为 | 7 个场景单元测试（首轮/停留/斜杠命令/退出/关闭开关/空输入/边界值）+ 真进程管道冒烟测试|
-| `FATPACKI.bat` 可用性 | 真调 PowerShell 抽载荷 → 沙箱跑两遍（全新安装 / 覆盖更新）→ **逐字节比对通过** |
-| 一键放行行为 | 按键矩阵单元测试 + 复位场景 + **真进程端到端**（做法见文末彩蛋）|
-| 全模块通读（rev.2.8）| 全部模块编译通过；跨模块属性引用全部命中；根级文档逐字通读 |
-| 报批 / 放行判定（rev.2.8）| `_never_auto_approve` 三档矩阵实测（`none` 全拦 / `writes` 放写入 / `all` 仅拦敏感文件）；`.env` 读写双路径均拦 |
-| 监控器回放修复（rev.2.8）| `ExecTailer._prime` 基线实测：新逻辑冷启动回放 **0** 行；旧逻辑会把历史整份回放（见文末彩蛋） |
-| `.env` 绑定补全（rev.2.8）| AST 清点全部 `register`，`env_name` 覆盖率 100%；相关常量改为 `_env_*` 读取并实测可覆盖 |
-| 专题文档合并（rev.3.1）| 逐字通读 4 份 md，按「机制 / 参数 / 命令 / 坑」四类提炼为第十五~十八章；并全库检索校正 3 处过时描述（`.env` 三件套、模型名改法、参数索引）|
-| QQ 模式离线验证（2026-09-25）| `free_run/test_qqmode.py` **211 行断言全绿**；`test_media.py` 约 60 项；端到端探针 A（直通 + 兜底投递）22 项全绿、探针 B（非主人 @ / 读免密 / 写要密码 / `pw_enable` 传递）18 项全绿；两份 `FATHFISH.py` 逐字节一致 |
-| 流式内核健壮性（2026-10-02）| `stream_core.py` 12 组 / 40+ 断言 + 集成 6 组 / 30 断言（含**真实注入代码**）；开发过程中这两套测试抓出 **7 个真 bug** |
-| 窗口端到端实证（2026-10-02）| `window_mode/e2e_check.py` 真弹窗 **17 项断言**：窗口输入 → 主循环取到 / 报批点按钮 / 敲 `n` / 流式气泡边收边长 / 关窗收尾 |
-| 拆分的函数体一致性（2026-10-02）| 逐函数 AST 结构比对（`ast.dump(..., include_attributes=False)`）：第一批 **33/33**、第二批 **qqmode 35/35 + streamhk 7/7** 全部逐字一致；另做「同口径顶层名字比对 + 残留引用反查 + 剥离主循环后 `exec` 一次 + 真启动一次」 |
-| 本轮文档增订的考古口径（2026-10-02）| 逐场解析 `logs/2026/09/24 ~ 10/02` 共 **24 场会话、约 20 MB** 文本，抽取「用户消息 + 工具调用清单」后归并为 CHANGELOG 第十一~十四节与本 README 第二十~二十二章；文件体积 / 行数全部实测于 2026-10-02 18:17 |
+| 启动链路四层 | 通读 `fatfish1.2.1.bat` / `fatfish_runtime.bat` / `launch.py` / `fatfish_watcher.py` / `status_console.py` |
+| 所有常量上限数值 | 逐文件通读源码顶部常量区（第 9 章各表）|
+| 命令表 vs 代码分派 | 全库检索命令字符串，逐条对照主程序与 `file_tools.py` |
+| 编码 / 行尾 / BOM 状态 | 二进制读入逐文件检测（源码 UTF-8 无 BOM；bat 为 CRLF）|
+| `_fatfish_pid.txt` 语义 | 通读 `fatfish_runtime.bat`；用「真身 PID 对照」实验验证重定向法 |
+| 计时器行为 | 7 个场景单元测试（首轮 / 停留 / 斜杠命令 / 退出 / 开关 / 空输入 / 边界）+ 真进程冒烟 |
+| 一键放行行为 | 按键矩阵单元测试 + 复位场景 + 真进程端到端验证 |
+| 退出信号与 PID 校验 | 真进程实验：旧格式信号 / 外来信号 / 真身信号三种情形逐一验证 |
+| 安装器内嵌清单 | 抽 payload → 解包 → 与现场文件**逐字节比对** |
 
 ---
+
 
 ## 附录 D：开发彩蛋 / Easter Eggs
 
@@ -2449,7 +2418,7 @@ PowerShell 当场报 `Illegal characters in path`，安装在第 2 步就断了�
 
 监控器是「子程序输出的镜子」，做法是 tail 输出文件。但它早期**不看时间**，
 冷启动时会把当天、甚至更早的执行输出**从头整份刷一遍** ——
-实测同一个目录回放量超过 4 万行，屏幕瞬间被历史输出淹没，也是监控器日志膨胀的主因。
+跑久了的机器上，一次性回放量能到几万行，屏幕瞬间被历史输出淹没，也是监控器日志膨胀的主因。
 
 **修法**：给它加一个**启动基线** —— 启动时先把已存在的输出文件记到当前长度，
 之后只滚基线之后的新增内容。修好后，同样场景回放 **0** 行。
@@ -2477,10 +2446,9 @@ PowerShell 当场报 `Illegal characters in path`，安装在第 2 步就断了�
 
 ### 🥚 彩蛋 8：备份区是怎么「爆仓」的
 
-备份规则是「根一级文件每次被改前都全量留档」，遇上疯狂改文档的夜晚就很壮观 ——
-一晚能堆出上百份副本。后来按「每个文件只留最近几份」清了一轮，
-并把历史副本连同工作台里的非程序文件一起挪进了单独的归档目录。
-现在文档里索性**不写死备份数量** —— 因为它秒级变化，写什么都是错的。
+备份规则是「根一级文件每次被改前都全量留档」，改得越勤堆得越快 ——
+一晚上就能堆出一大堆同名副本。建议按「每个文件只留最近几份」定期清一轮。
+所以文档里索性**不写死备份数量** —— 因为它秒级变化，写什么都是错的。
 
 ---
 
