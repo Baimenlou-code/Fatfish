@@ -1,7 +1,7 @@
 # fatfish_core —— 肥鱼功能部件
 
-> 2026-10-02 分两批从 `FATHFISH.py` 拆出。
-> `FATHFISH.py`：**4848 行 / 242.4 KB → 3262 行 / 171.7 KB（-32.7%）**
+> 2026-10-02 分两批从 `FATHFISHI.py` 拆出。
+> `FATHFISHI.py`：**4848 行 / 242.4 KB → 3262 行 / 171.7 KB（-32.7%）**
 
 ---
 
@@ -42,7 +42,7 @@ def bind(**kw):
         if _v is not None:
             g[_k] = _v
 
-# 主程序侧（FATHFISH.py 的 _bind_modparts / _sync_modcfg）
+# 主程序侧（FATHFISHI.py 的 _bind_modparts / _sync_modcfg）
 _qqmode.bind(log=log, _qq_orig_request_approval=_request_approval,
              _BG_PROMPT_POS=_BG_PROMPT_POS)
 ```
@@ -69,7 +69,7 @@ _qqmode.bind(log=log, _qq_orig_request_approval=_request_approval,
 
 1. AST 把目标函数整段取出（含前置注释），照抄进新模块；
 2. 为它引用的每个模块级常量写默认值（**能用字面量就用字面量**，别写 `_env_int(...)`）；
-3. 在 `FATHFISH.py` 的 `[SPLIT v1] / [SPLIT v2]` 导入块里加一行；
+3. 在 `FATHFISHI.py` 的 `[SPLIT v1] / [SPLIT v2]` 导入块里加一行；
 4. 在 `_sync_modcfg()` 里加同步行（该常量别处也被引用时）；
 5. 删掉原定义，然后跑四件事：
    - `ast.parse(new_src)` 语法校验；
@@ -86,11 +86,11 @@ _qqmode.bind(log=log, _qq_orig_request_approval=_request_approval,
 
 ```bat
 :: 回到拆分前（4848 行）
-copy /Y "E:\FATFISH\oldver\_root_bak_cleanup_20261002\FATHFISH.py.pre_split_20261002_172636.bak" "E:\FATFISH\FATHFISH.py"
+copy /Y "E:\FATFISH\oldver\_root_bak_cleanup_20261002\FATHFISHI.py.pre_split_20261002_172636.bak" "E:\FATFISH\FATHFISHI.py"
 :: 仅回滚第二批（三项拆分）
-copy /Y "E:\FATFISH\oldver\_root_bak_cleanup_20261002\FATHFISH.py.pre_split2.bak" "E:\FATFISH\FATHFISH.py"
+copy /Y "E:\FATFISH\oldver\_root_bak_cleanup_20261002\FATHFISHI.py.pre_split2.bak" "E:\FATFISH\FATHFISHI.py"
 :: 仅回滚「默认工作台改根目录」
-copy /Y "E:\FATFISH\oldver\_root_bak_cleanup_20261002\FATHFISH.py.pre_wsroot.bak" "E:\FATFISH\FATHFISH.py"
+copy /Y "E:\FATFISH\oldver\_root_bak_cleanup_20261002\FATHFISHI.py.pre_wsroot.bak" "E:\FATFISH\FATHFISHI.py"
 copy /Y "E:\FATFISH\oldver\_root_bak_cleanup_20261002\workspace.py.pre_wsroot.bak" "E:\FATFISH\workspace.py"
 ```
 

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """fatfish_core.streamhk —— 流式输出胶水层
 
-从 FATHFISH.py 拆出（原 STREAM-PATCH v1 块）。真正的增量渲染在
+从 FATHFISHI.py 拆出（原 STREAM-PATCH v1 块）。真正的增量渲染在
 stream_core.py；本模块负责「何时用流式 / 何时回退非流式」以及
 转圈动画与正文的交接。
 
@@ -18,7 +18,7 @@ except Exception:
 
 _FC_AVAILABLE = _FC_SC is not None
 
-# ============ 注入接口（由 FATHFISH.py 启动时 bind）============
+# ============ 注入接口（由 FATHFISHI.py 启动时 bind）============
 log = None
 _wait_stop = None
 

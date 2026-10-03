@@ -24,7 +24,7 @@ status_console.py —— 肥鱼「状态台」（独立窗口）/ FatFish Status
 
 关键约定（**不丢信息**）：
   主程序在写状态前会检查 console.online。
-  若本窗口没启动（例如直接跑 python FATHFISH.py），心跳不存在 →
+  若本窗口没启动（例如直接跑 python FATHFISHI.py），心跳不存在 →
   主程序自动把这些信息打回主窗口，绝不会静默吞掉。
 
 按键 / Keys

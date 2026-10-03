@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """fatfish_core.qqmode —— QQ 前置模式
 
-从 FATHFISH.py 拆出（原 QQMODE-INPROC v1 块）。包含：QQ 消息收发、
+从 FATHFISHI.py 拆出（原 QQMODE-INPROC v1 块）。包含：QQ 消息收发、
 附件守卫、非主人密码门禁、报批改道 QQ、旁听攒批与直通、看门狗线程。
 
 ★ `_QQ` 与全套 `_QQ_*` 常量随本模块一起搬入（原本只被这些函数使用）。
@@ -20,7 +20,7 @@ from common import ts as _ts
 from ui_core import BB, BC, BG, BOLD, BR, BY, DIM, paint, strip_markup
 from .policy import _python_is_readonly
 
-# ============ 注入接口（由 FATHFISH.py 启动时 bind）============
+# ============ 注入接口（由 FATHFISHI.py 启动时 bind）============
 log = None
 _qq_orig_request_approval = None
 _BG_PROMPT_POS = None
@@ -253,7 +253,7 @@ def _qq_owned(uid=None):
 def _qq_init_dirs():
     """定位 data/link/（与 qq_bridge/qqlink.py 保持一致）。"""
     try:
-        base = os.path.dirname(os.path.abspath(__file__))   # FATHFISH.py 所在目录
+        base = os.path.dirname(os.path.abspath(__file__))   # FATHFISHI.py 所在目录
     except NameError:
         base = os.getcwd()
     for cand in (base, os.getcwd(), workspace.get_workspace()):

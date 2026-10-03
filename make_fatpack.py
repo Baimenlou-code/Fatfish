@@ -56,7 +56,7 @@ make_fatpack.py —— 重新生成「肥鱼一键安装器」（把当前最新
     2026-09-20（再后续）：补齐 EMBED —— 新增 ui_core.py / verify_tools.py /
     settings.py / boot_report.py / common.py 共 5 个模块（12 → 17 项）。
     它们是「模块拆分」之后遗留的漏网之鱼（展示层 / 双人核验 / 参数中心 / 开工自检 /
-    公共件）：主程序 FATHFISH.py 第 30、76、1532 行分别裸 import
+    公共件）：主程序 FATHFISHI.py 第 30、76、1532 行分别裸 import
     verify_tools / ui_core / settings，少任何一个都会在 import 阶段直接
     ModuleNotFoundError —— 旧安装器装完双击启动必然闪退。
     因此同时做了两件配套的事：
@@ -76,14 +76,14 @@ import hashlib
 # 会被内嵌进安装器的「运行必需文件」
 #
 # ⚠️ 维护约定：本清单必须覆盖「主程序启动路径上全部本地模块」。
-#    FATHFISH.py 顶部的裸 import（ui_core / verify_tools）与中段的 import settings
+#    FATHFISHI.py 顶部的裸 import（ui_core / verify_tools）与中段的 import settings
 #    一旦缺文件，主程序在 import 阶段就崩，安装器第 6 步的自检也查不出来
 #    （旧版自检只列了清单内的模块，属于「自证清白」）。
 #    以后新增 / 拆分 .py 模块，请同步：① 本清单；② 下面的 SELFCHECK_MODULES。
 #    核对办法：python make_fatpack.py --manifest（会顺带跑一次审计）。
 EMBED = [
     # ---- 主程序与核心模块 ----
-    "FATHFISH.py",            # 主程序
+    "FATHFISHI.py",            # 主程序
     "ui_core.py",             # 展示层（颜色/标记/横幅/等待动画/签名）
     "verify_tools.py",        # 双人核验引擎
     "settings.py",            # 参数中心 /set
@@ -116,10 +116,9 @@ EMBED = [
     "fatfish_core/layout.py",     # 编辑器组布局数据模型（纯数据）
     "fatfish_core/exectail.py",   # exec 子程序输出 tailer
     # ---- 启动脚本 ----
-    "fatfish1.2.1.bat",       # 启动器（双击这个）
+    "fatfish1.2.2.bat",       # 启动器（双击这个）
     "fatfish_runtime.bat",    # 运行窗口
     "fatfish_lang.bat",       # 语言探测
-    "fatfish1.1.1.bat",       # 旧名转发壳（3 行，兼容老快捷方式）
     # ---- 小唐话词库（signatures/，2026-10-03）----
     #   个性签名的句子**不写在代码里**，放这些 txt，一行一句。
     #   用户可以自由增删改；ui_core.load_signatures() 会读它们（带 mtime 热重载）。
@@ -150,7 +149,7 @@ SELFCHECK_MODULES = [
 ]
 
 MARKER = "##PYBEGIN##"
-VERSION = "1.2.1"
+VERSION = "1.2.2"
 EDITION = "I"                      # 兜底徽标：输出名无法识别时使用
 DEFAULT_OUT = "FATPACKII.bat"      # 默认产物（2026-09-20 起由 I 版改为 II 版）
 
@@ -297,8 +296,8 @@ if errorlevel 1 (
     exit /b 1
 )
 del "%EXTRACT_PY%" >nul 2>nul
-if not exist "FATHFISH.py" (
-    echo   [X] FATHFISH.py was not extracted - aborting.
+if not exist "FATHFISHI.py" (
+    echo   [X] FATHFISHI.py was not extracted - aborting.
     pause
     exit /b 1
 )
@@ -454,20 +453,20 @@ echo [7/7] Install finished!
 echo ------------------------------------------------------------
 echo    Next steps:
 echo      1. make sure .env holds your API keys
-echo      2. double-click "fatfish1.2.1.bat" to start FatFish
+echo      2. double-click "fatfish1.2.2.bat" to start FatFish
 echo ------------------------------------------------------------
 echo.
 
 if /i "%FATFISH_NO_GUI%"=="1" (
-    echo       [i] Launch prompt skipped - start fatfish1.2.1.bat manually.
+    echo       [i] Launch prompt skipped - start fatfish1.2.2.bat manually.
 ) else (
     set "ANS="
     set /p "ANS=     Launch FatFish now? type y to start, Enter to skip : "
     if /i "!ANS!"=="y" (
         echo       [OK] Launching in a separate window...
-        start "" cmd /k "%~dp0fatfish1.2.1.bat"
+        start "" cmd /k "%~dp0fatfish1.2.2.bat"
     ) else (
-        echo       [i] Not launched. Double-click fatfish1.2.1.bat anytime.
+        echo       [i] Not launched. Double-click fatfish1.2.2.bat anytime.
     )
 )
 

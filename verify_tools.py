@@ -1391,7 +1391,7 @@ def _selftest():
         "alternatives": ["先 ws_read 再 ws_replace"],
         "risks": ["全量覆盖不可逆"],
     })
-    res = review([("ws_write", {"path": "FATHFISH.py", "content": "x" * 50}),
+    res = review([("ws_write", {"path": "FATHFISHI.py", "content": "x" * 50}),
                   ("ws_read", {"path": "a.txt"})],
                  user_goal="帮我改个 bug", ai_plan="我打算整体重写")
     check("review 返回 blocked", res["blocked"] and res["verdict"] == "revise")

@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 """fatfish_core.policy —— 报批判定 / 只读 Python 静态判定
 
-从 FATHFISH.py 拆出，是「要不要人工报批」的唯一判定入口，
+从 FATHFISHI.py 拆出，是「要不要人工报批」的唯一判定入口，
 外加 ws_run_python 的 AST 只读判定（只省一次审查员调用，人工闸门一道不少）。
-★ 本模块配置项在 /set 变更时由主程序重新注入（见 FATHFISH._sync_modcfg）。"""
+★ 本模块配置项在 /set 变更时由主程序重新注入（见 FATHFISHI._sync_modcfg）。"""
 
 from .envutil import _env_clean
 import workspace
 
 # ============ 外部配置 ============
-# 由 FATHFISH.py 启动时注入真值；此处默认值只保证「单独 import 也不炸」。
+# 由 FATHFISHI.py 启动时注入真值；此处默认值只保证「单独 import 也不炸」。
 APPROVAL_REQUIRED = {'ws_append', 'ws_replace', 'ws_delete', 'ws_write'}
 APPROVE_SCOPE = (_env_clean("APPROVE_SCOPE", "writes") or "writes").lower()
 AUTO_APPROVE_SCOPE = (_env_clean("AUTO_APPROVE_SCOPE", "all") or "all").lower()
@@ -19,7 +19,7 @@ _READONLY_ALWAYS_BLOCK_ATTRS = {'execvp', 'spawnv', 'putenv', 'spawnve', 'execve
 _READONLY_FILE_ALLOW = {'seek', 'readlines', 'fileno', 'readline', 'errors', 'newlines', 'writable', 'isatty', 'read', 'closed', 'encoding', 'flush', 'name', 'readable', 'tell', 'mode', 'close'}
 _READONLY_MAX_CHARS = 40000
 _READONLY_MUTATING_ATTRS = {'rmtree', 'send', 'copyfile', 'copytree', 'call', 'removedirs', 'copy2', 'unlink', 'kill', 'rmdir', 'truncate', 'sendall', 'save', 'write', 'chown', 'write_bytes', 'chmod', 'run', 'urlopen', 'write_text', 'mkdir', 'to_excel', 'chdir', 'Popen', 'connect', 'rename', 'abort', 'check_output', 'to_pickle', 'check_call', 'to_csv', 'writelines', 'makedirs', 'dump'}
-_READONLY_ROOT_ALLOW = None   # 运行时由 FATHFISH.py 注入
+_READONLY_ROOT_ALLOW = None   # 运行时由 FATHFISHI.py 注入
 _READONLY_SAFE_MODULES = {'functools', 'unicodedata', 'stat', 'uuid', 'fnmatch', 'math', 'hashlib', 'string', 'operator', 'textwrap', 'time', 're', 'enum', 'datetime', 'dataclasses', 'pathlib', 'typing', 'csv', 'zlib', 'copy', 'io', 'collections', 'pprint', 'base64', 'ast', 'difflib', 'sys', 'os', 'gzip', 'random', 'binascii', 'decimal', 'fractions', 'itertools', 'locale', 'platform', 'struct', 'glob', 'json'}
 _READONLY_SECRET_HINTS = ('.env', 'id_rsa', '.pem', 'private_key', 'credential', 'api_key', 'apikey', 'secret', 'password', 'passwd', 'sk-')
 

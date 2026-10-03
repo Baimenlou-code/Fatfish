@@ -329,7 +329,7 @@ def render_inline(line):
 
 def print_banner():
     """打印启动横幅（青→粉渐变边框）。"""
-    title = "🐟 DeepSeek 联网肥鱼 H 版 v1.2.1 已启动 [DeepSeek Net Fish H Edition v1.2.1 Started]"
+    title = "🐟 DeepSeek 联网肥鱼 H 版 I v1.2.2 已启动 [DeepSeek Net Fish H Edition I v1.2.2 Started]"
     sub = "输入 /help 查看全部命令 [type /help for all commands]"
     w = max(len(title), len(sub)) + 6
     line = "─" * w
@@ -759,7 +759,7 @@ def console_clear_from(y_from, y_to=None):
     """抹掉屏幕上 [y_from, y_to] 这**整段**（含两端），并把光标放回 y_from 行首。
 
     用途：报批「采完即扫」—— 决定一旦做出，那一段就从眼前消失，
-    主界面只留对话。凭证另行留档（见 FATHFISH._approval_receipt）。
+    主界面只留对话。凭证另行留档（见 FATHFISHI._approval_receipt）。
 
     实现：Win32 直接填空格（同时复位字符属性，避免留下彩色底）；
     失败时退回 ANSI（先开 VT 处理）。判定不了就返回 False ——

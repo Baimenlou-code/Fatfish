@@ -210,7 +210,7 @@ def stats():
 
 
 # ============ 与 OpenAI 非流式响应结构兼容的「壳」 ============
-# 主循环会用到的字段（逐字核对过 FATHFISH.py:3917-4006）：
+# 主循环会用到的字段（逐字核对过 FATHFISHI.py:3917-4006）：
 #   msg.content            —— 可为 None
 #   msg.tool_calls         —— 无工具调用时必须是 None（下游用 getattr(...) 判空）
 #   tc.id / tc.function.name / tc.function.arguments

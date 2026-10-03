@@ -4,7 +4,7 @@
 launch.py —— 肥鱼「启动枢纽」
 
 职责：
-    1. 以子进程方式启动主程序 FATHFISH.py，拿到它【真实的 PID】；
+    1. 以子进程方式启动主程序 FATHFISHI.py，拿到它【真实的 PID】；
     2. 用这个 PID 启动监控器 fatfish_watcher.py（独立黑窗口，实时滚动）；
     3. 等待主程序结束；
     4. 主程序一结束，监控器会自行检测到「目标 PID 消失」，
@@ -38,7 +38,7 @@ for _name in ("stdout", "stderr"):
 
 # ============ 路径 ============
 HERE = os.path.dirname(os.path.abspath(__file__))
-MAIN_SCRIPT = os.path.join(HERE, "FATHFISH.py")
+MAIN_SCRIPT = os.path.join(HERE, "FATHFISHI.py")
 WATCHER_SCRIPT = os.path.join(HERE, "fatfish_watcher.py")
 STATUS_SCRIPT = os.path.join(HERE, "status_console.py")
 PY = sys.executable or "python"

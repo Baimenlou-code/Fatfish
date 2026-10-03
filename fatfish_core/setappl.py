@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """fatfish_core.setappl —— /set 的设置 applier
 
-从 FATHFISH.py 拆出。被 settings.register(apply=...) 引用，/set 改值时调用。
+从 FATHFISHI.py 拆出。被 settings.register(apply=...) 引用，/set 改值时调用。
 
 ★ 原本用 globals()[X] = v 直接写主程序全局变量；搬进模块后那样会写错
   命名空间，故统一改为 _put(X, v)，setter 由主程序 bind() 注入。"""
@@ -9,7 +9,7 @@
 import os
 import net_tools
 
-# ============ 注入接口（由 FATHFISH.py 启动时 bind）============
+# ============ 注入接口（由 FATHFISHI.py 启动时 bind）============
 _reconfig_verifier = None   # 注入：核验配置重注入
 _sync_modcfg = None         # 注入：部件配置同步
 

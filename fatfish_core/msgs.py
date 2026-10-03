@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """fatfish_core.msgs —— 消息流水线
 
-从 FATHFISH.py 拆出：消息分组 / 清洗 / token 估算 / 裁剪 / 代码块抽取。
+从 FATHFISHI.py 拆出：消息分组 / 清洗 / token 估算 / 裁剪 / 代码块抽取。
 ★ save_code_files 与 ai_name_code 留在主程序：它们要调模型客户端（client）
   与 MODEL，属需要外部副作用的一次调用，故不搬入本模块。
 外部配置由主程序启动时注入（见下方 CONFIG 段）。"""
@@ -10,7 +10,7 @@ from .envutil import _env_int
 import re
 
 # ============ 外部配置 ============
-# 由 FATHFISH.py 启动时注入真值；此处默认值只保证「单独 import 也不炸」。
+# 由 FATHFISHI.py 启动时注入真值；此处默认值只保证「单独 import 也不炸」。
 MAX_HISTORY_TOKENS = _env_int("MAX_HISTORY_TOKENS", 800000)
 TRIM_KEEP_FIRST_USER = True
 TRIM_TOOL_CLIP_CHARS = _env_int("TRIM_TOOL_CLIP_CHARS", 40000)

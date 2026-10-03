@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """fatfish_core.envutil —— 环境变量读取 / 密钥体检
 
-从 FATHFISH.py 拆出。纯函数，只依赖 os，可独立自测。"""
+从 FATHFISHI.py 拆出。纯函数，只依赖 os，可独立自测。"""
 
 import os
 import re
 
 # ============ 外部配置 ============
-# 由 FATHFISH.py 启动时注入真值；此处默认值只保证「单独 import 也不炸」。
+# 由 FATHFISHI.py 启动时注入真值；此处默认值只保证「单独 import 也不炸」。
 
 # ============ 配置 ============
 # ---- .env 读取容错辅助 ----

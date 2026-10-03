@@ -419,7 +419,7 @@ def _force_utf8_stdio():
 
     背景：Windows + 中文 locale（cp936）下，被重定向到管道/文件时，
     Python 会按 locale 编码输出中文，下游按 UTF-8 读就会乱码。
-    主程序 FATHFISH.py 有 _force_utf8_streams() 处理这件事；
+    主程序 FATHFISHI.py 有 _force_utf8_streams() 处理这件事；
     本模块作为**独立子进程**被调用时不会经过那段代码，所以这里自带一份。
     """
     for name in ("stdout", "stderr"):

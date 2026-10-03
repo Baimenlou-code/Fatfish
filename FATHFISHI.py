@@ -1038,7 +1038,7 @@ def _exec_wait_label(name, args):
 #     于是主窗口 = 对话 + 报批，其余过程信息全部去旁边的窗口。
 #   通信：主程序 append status.log → 状态台增量 tail；
 #         状态台周期 touch console.online 作为心跳。
-#   降级：状态台没启动（例如直接跑 python FATHFISH.py）→ 心跳不存在 →
+#   降级：状态台没启动（例如直接跑 python FATHFISHI.py）→ 心跳不存在 →
 #         _status_mirror() 自动把信息打回主窗口，**绝不静默吞掉**。
 STATUS_CONSOLE_ENABLED = _env_bool("STATUS_CONSOLE", True)
 STATUS_CONSOLE_TTL     = _env_float("STATUS_CONSOLE_TTL", 6.0)   # 心跳多久算过期（秒）
@@ -1452,7 +1452,7 @@ def make_prompt():
 # ============ 流式输出胶水层（2026-10-02 已迁出到 fatfish_core/streamhk.py）============
 #   ★ 函数定义见文件顶部导入块；本说明块仅作标记。
 #   ★ stream_mode/patch_stream.py --revert 现在只会删掉本说明块，不影响程序。
-#   ★ 要整体回退请用备份：FATHFISH.py.pre_split*.bak
+#   ★ 要整体回退请用备份：FATHFISHI.py.pre_split*.bak
 # [/STREAM-PATCH v1]
 
 # [WINDOW-PATCH v1]
@@ -1880,7 +1880,7 @@ SYSTEM_PROMPT = (
 
     "【工作台与工具】工作台根目录默认为「启动根目录」（= 程序所在目录），所有路径都被限制在其中。\n"
     "  ★ 作业约定：日常产出请尽量放在 workspace/ 子目录里 —— 中间脚本、临时数据、实验产物都放那儿，\n"
-    "    以保持根目录整洁；只有「属于程序本身的代码 / 配置」（如 FATHFISH.py、fatfish_core/、\n"
+    "    以保持根目录整洁；只有「属于程序本身的代码 / 配置」（如 FATHFISHI.py、fatfish_core/、\n"
     "    workspace.py 等）才直接改根目录。\n"
     "  查：ws_where 当前根目录｜ws_cd 切换根目录｜ws_cd_approve 确认切换｜"
     "ws_list 列目录｜ws_search 全文搜索｜ws_read 读文件\n"

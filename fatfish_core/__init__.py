@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""fatfish_core —— 肥鱼主程序的功能部件（从 FATHFISH.py 拆出）
+"""fatfish_core —— 肥鱼主程序的功能部件（从 FATHFISHI.py 拆出）
 
 拆分原则：
   · 函数体**逐字搬运**，不改一行逻辑；

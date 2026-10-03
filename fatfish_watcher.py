@@ -4,7 +4,7 @@
 fatfish_watcher.py —— 肥鱼「子程序输出监控器」
 
 用途：
-    与主程序（FATHFISH.py）并行运行，独立黑窗口，专门实时滚动显示
+    与主程序（FATHFISHI.py）并行运行，独立黑窗口，专门实时滚动显示
     exec_tools.py 跑起来的 CMD / Python 程序的输出。
 
     换句话说：这个窗口就是「exec_tools 子程序输出的实时镜子」。
@@ -69,7 +69,7 @@ ABORT_KEYS = (b"k", b"K", b"\x1b")   # K / ESC
 
 
 # ---------- [QUIT-CLEAN v1] 主程序退出信号 ----------
-#   主程序（FATHFISH.py）结束时会写 .fatfish_tmp/shutdown.signal；
+#   主程序（FATHFISHI.py）结束时会写 .fatfish_tmp/shutdown.signal；
 #   见到就立刻收尾，不再等那 30 秒倒计时（倒计时是「主程序被强杀、
 #   来不及通知」时的兜底）。比对 mtime 与自身启动时刻，避免上次残留误伤。
 _SHUTDOWN_SIGNAL = os.path.join(

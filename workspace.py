@@ -9,7 +9,7 @@ import exec_tools
 # 2026-10-02：默认工作台 = 「启动根目录」（= 本程序所在目录，也是运行时 cwd）。
 #   原先是 <程序目录>/workspace。改成根目录，是为了让 AI 能直接读写
 #   fatfish_core/、logs/、generated_code/ 这些与程序同级的目录；
-#   ★ 但日常产出仍应尽量落在 workspace/ 子目录里（见 FATHFISH.py 的系统提示词）。
+#   ★ 但日常产出仍应尽量落在 workspace/ 子目录里（见 FATHFISHI.py 的系统提示词）。
 #   想恢复旧行为：在 .env 里设 WORKSPACE_DIR=<程序目录>\workspace
 DEFAULT_WORKSPACE = os.getenv(
     "WORKSPACE_DIR",
