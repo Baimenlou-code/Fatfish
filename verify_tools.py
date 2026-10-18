@@ -418,6 +418,20 @@ VERIFIER_SYSTEM = (
     "· 补充 supplement：动作可行，但你对「会不会伤到东西」确实拿不准，"
     "需要执行者说明目的 / 影响范围 / 回滚方式。**不是「信息不完整」就打回。**\n"
     "· 变更 revise：确有错误、风险，或存在明显更优且更小的方案，必须换方案重审。\n\n"
+    "【命令方言必查（2026-10-19 新增，优先级仅次于安全）】\n"
+    "你经常看到的动作是 ws_run_cmd —— 它由 exec_tools 用 **`cmd /c`（Windows）** "
+    "或 **`/bin/sh -c`（Unix）** 执行，并非用户交互终端里的那个 shell。\n"
+    "送审材料会给出【运行环境事实】与【机器预检结果】，**以它们为准判定方言**。\n"
+    "· 若环境是 cmd.exe，以下写法**必然跑不通**，见到就该判「变更」并给出正确写法：\n"
+    "    $env:X / $X            → cmd 不展开 shell 变量，应用 %X%（设值用 set X=1）\n"
+    "    Get-ChildItem 等 cmdlet → 那是 PowerShell，cmd 里没有\n"
+    "    export X=1             → 那是 bash/sh，应用 set X=1\n"
+    "    grep / sed / awk / which / rm -rf / cp / cat / touch → Unix 工具，cmd 无\n"
+    "    .ps1 直跑              → cmd 不能执行 PowerShell 脚本\n"
+    "    用单引号当引号         → cmd 不识别，会连引号一起传给程序，应用双引号\n"
+    "· 若环境是 /bin/sh，反向同理：dir / copy / set X=1 / %X% 都是错的。\n"
+    "· 判断要具体：不要只说「命令可能有问题」，要写出**哪一段错了、该改成什么**。\n"
+    "· 但若环境事实显示平台已匹配（例如在 Linux 上写 grep），那就**不是**错误，别误伤。\n\n"
     "【不要反复加码（重要）】\n"
     "若送审材料标明这是同一动作的第 2 次及以后送审，说明执行者已按你的上一条要求改过："
     "上次要求已满足就通过；**不要另提无关的新要求**；"
@@ -553,6 +567,93 @@ def _join_trim(sections, limit, floor=250):
     return text[:limit]
 
 
+def _env_precheck_block(actions):
+    """生成【运行环境事实】+【机器预检结果】两段文本（2026-10-19 新增）。
+
+    ★ 这是本次强化的核心：
+      以前审查员只能"凭感觉"判断命令对不对，因为它不知道目标 shell 是什么。
+      现在给它两样确定性输入：
+        ① 环境事实 —— 目标平台 / 执行 shell / 编码，由 system_facts 统一采集；
+        ② 机器预检 —— 用正则对每条 ws_run_cmd 命令做方言扫描，命中即列明。
+      审查员因此不再"猜"，而是**在一份本地判据上复核**。
+
+    返回 (环境段, 预检段)；拿不到环境时两段可能为空串。
+    """
+    # ★ 2026-10-19 加固：不能裸 import。
+    #   实测 net_tools._load_ds() 会把 workspace/ 插到 sys.path 最前，
+    #   而 workspace/ 下有若干同名旧副本（verify_tools、boot_report、net_tools…）。
+    #   一旦在 _load_ds() 之后才首次 import，就可能拿到旧模块。
+    #   这里把本文件所在目录（根目录）显式顶到最前，再按文件名精确加载，双重保险。
+    try:
+        _here = os.path.dirname(os.path.abspath(__file__))
+        if sys.path and os.path.normcase(sys.path[0]) != os.path.normcase(_here):
+            try:
+                sys.path.insert(0, _here)
+            except Exception:
+                pass
+        import system_facts as _sf
+        _sf_path = os.path.abspath(getattr(_sf, "__file__", "") or "")
+        if _sf_path and os.path.dirname(_sf_path) != _here:
+            # 拿到的不是根目录那份（极罕见）→ 按路径精确重新加载
+            import importlib.util as _ilu
+            _spec = _ilu.spec_from_file_location(
+                "_system_facts_root", os.path.join(_here, "system_facts.py"))
+            _sf = _ilu.module_from_spec(_spec)
+            _spec.loader.exec_module(_sf)
+    except Exception:
+        return "", ""
+    try:
+        facts = _sf.collect()
+    except Exception:
+        return "", ""
+
+    env_lines = []
+    try:
+        env_lines.append("· 系统：%s ｜ %s" % (facts.get("os_label") or "?",
+                                              facts.get("machine") or "?"))
+        env_lines.append("· 执行 shell：%s%s"
+                         % (facts.get("shell") or "?",
+                            "（注意：**不是** PowerShell）"
+                            if facts.get("shell") == "cmd.exe" else ""))
+        enc = (facts.get("encoding") or {}).get("preferred") or "?"
+        env_lines.append("· 控制台编码：%s" % enc)
+    except Exception:
+        pass
+    env_block = ("【运行环境事实（由主程序采集，可信；判断命令方言以此为准）】\n"
+                 + "\n".join(env_lines)) if env_lines else ""
+
+    hits = []
+    try:
+        for name, args in (actions or []):
+            if str(name) not in ("ws_run_cmd", "ws_bg_cmd"):
+                continue
+            try:
+                cmd = str((args or {}).get("command") or "")
+            except Exception:
+                cmd = ""
+            if not cmd.strip():
+                continue
+            for level, msg, fix in _sf.check_command(cmd, facts):
+                hits.append((str(name), cmd, level, msg, fix))
+    except Exception:
+        hits = []
+
+    if not hits:
+        pre = ("【机器预检结果】\n"
+               "已对送审命令做方言扫描，**未发现明显的 shell 方言错误**。"
+               "（这只说明写法与目标 shell 相容，不代表业务逻辑正确。）")
+    else:
+        _lines = []
+        for name, cmd, level, msg, fix in hits[:8]:
+            _lvl = {"error": "必然失败", "warn": "多半失败", "info": "提示"}.get(level, level)
+            _lines.append("· [%s] %s：%s\n    命令片段：%s\n    建议：%s"
+                          % (_lvl, name, msg, _clip(cmd, 160), fix))
+        pre = ("【机器预检结果（本地正则判定，高可信）】\n"
+               + "\n".join(_lines)
+               + "\n★ 上述条目若确认为真，请直接判「变更」并在「要求」里写明正确写法。")
+    return env_block, pre
+
+
 def build_action_prompt(actions, user_goal="", ai_plan="", context_text="",
                         user_events="", extra_note=""):
     """拼装送给审查员的 user 消息。
@@ -573,12 +674,18 @@ def build_action_prompt(actions, user_goal="", ai_plan="", context_text="",
         lines.append(f"{i}. " + describe_action(name, args))
     action_block = "【待核验的动作清单】\n" + "\n".join(lines)
 
+    # 2026-10-19：把「环境事实 + 机器预检」拼进送审材料（与动作清单同权重，
+    # 因为它直接决定命令能不能跑 —— 属于"明确错误"，正是该拦的那一类）。
+    _env_block, _pre_block = _env_precheck_block(actions)
+    _facts_block = "\n\n".join(x for x in (_env_block, _pre_block) if x)
+
     sections = [
         (6, "【用户的原始需求】\n" +
             (_clip(user_goal, GOAL_MAX_CHARS) if user_goal else "（未能提取到）")),
         (7, "【执行者本轮的自述 / 计划】\n" + _clip(ai_plan, PLAN_MAX_CHARS)
             if ai_plan.strip() else ""),
         (9, action_block),                      # 动作清单：权重最高
+        (9, _facts_block),                      # 环境事实 + 机器预检：同权重
         (8, "【送审上下文（由主程序注入，可信）】\n" + _clip(extra_note, 800)
             if extra_note.strip() else ""),
         (8, "【用户真实操作记录（原声）】\n"

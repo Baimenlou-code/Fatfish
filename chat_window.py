@@ -117,11 +117,15 @@ try:
     from fatfish_core.layout import (       # noqa: E402
         LayoutModel, PANELS as LAYOUT_PANELS,
         PANEL_LABELS, PRESETS as LAYOUT_PRESETS,
+        ALL_PANELS as LAYOUT_ALL_PANELS,
     )
     LAYOUT_OK = True
 except Exception:                            # pragma: no cover
     LAYOUT_OK = False
     LAYOUT_PANELS = ("chat", "log", "status", "exec")
+    # ★ 2026-10-18 23:11 用户纠正：「联网」不是第五个面板，是顶栏第三个按钮
+    #   → ALL 与 PANELS 一样（见 fatfish_core/layout.py 的 PANELS_OPTIONAL）。
+    LAYOUT_ALL_PANELS = ("chat", "log", "status", "exec")
     PANEL_LABELS = {"chat": "💬 对话", "log": "📜 日志",
                     "status": "🧿 状态", "exec": "🖥 监控"}
     LAYOUT_PRESETS = {}
@@ -846,6 +850,31 @@ def _make_scrollbar(parent, panel, txt, width=None):
 
 
 # ================================================================ 窗口
+# ============================================ [FATGUI v1] QQ 状态桥
+def _QQ_GET(_qm, _M, k):
+    """读 QQ 活状态；取不到就 False（绝不抛）。"""
+    try:
+        return _qm._QQ.get(_M.get(k, k), False)
+    except Exception:
+        return False
+
+
+def _QQ_SET(_qm, _M, k, v):
+    """写 QQ 活状态，并**真的启停**看门狗。返回写入后的值。"""
+    try:
+        key = _M.get(k, k)
+        _qm._QQ[key] = v
+        if k == "qq_on":
+            if v:
+                _qm._qq_start_watch()          # 起看门狗线程
+                _qm._QQ["stop"] = False
+            else:
+                _qm._QQ["stop"] = True         # 让看门狗自然退出
+        return v
+    except Exception:
+        return v
+
+
 class ChatWindow(object):
     def __init__(self, title="🐟 肥鱼 · 对话", model="", workspace="",
                  on_send=None, echo_console=True, topmost=False):
@@ -885,7 +914,7 @@ class ChatWindow(object):
         #     data["log"]    : [原始行, ...]（含 ANSI，交给 AnsiPainter 上色）
         #     data["status"] : [过程信息行, ...]   （P1c 接线）
         #     data["exec"]   : [子程序输出行, ...] （P1c 接线）
-        self.data = {"chat": [], "log": [], "status": [], "exec": []}
+        self.data = {"chat": [], "log": [], "status": [], "exec": [], "net": []}
         self._data_echo = True           # False = 只写数据层，不刷视图（批量重放用）
         # ---- ★ [P1b] 编辑器组式布局（VS Code 风格）----
         self._ui_mode = "classic" if _UI_FORCE_CLASSIC else "editor"
@@ -922,6 +951,14 @@ class ChatWindow(object):
         # ---- ★ [P1c] 状态 / 监控 两个面板的数据源 ----
         self.status_text = None          # 「🧿 状态」面板正文（过程信息）
         self.status_painter = None
+        # ---- ★ 2026-10-18 「🌐 联网」顶栏菜单（**不是**面板）----
+        #   用户 23:11 原话：「我意思是把联网窗口做到和布局和功能并列，
+        #                   结果给我写成大框了」
+        #   → 顶栏第三个两字按钮〔联网〕，浮层里 5 行循环开关；不占版面。
+        self._net_menu = None            # InlineMenu（_start_fatgui 里创建）
+        self._net_hook_bound = False     # 是否已把钩子挂到 net_tools
+        self._tk_ident = None            # Tk 线程 ident（判断流水回调是否跨线程）
+        self._net_quota_cache = None     # 用量文本缓存（(文本, 时间戳)）
         self.painters = {}               # panel -> AnsiPainter（log/status/exec 共用）
         self._exec_tail = None           # 子程序输出 tailer（fatfish_core.exectail）
         self._exec_tail_job = None
@@ -1185,9 +1222,15 @@ if __name__ == "__main__":
 
     def _on_close(self):
         self.alive = False
+        try:
+            self._spent_stop()            # ★ 2026-10-18：撤掉「本轮已用」定时器
+        except Exception:
+            pass
         self._stop_hover_watch()          # ★ 先停定时回调，再销毁窗口
         self._stop_exec_tail()            # ★ [P1c]
         self._stop_layout_save()          # ★ [P1d]
+        self._net_unbind_hook()           # ★ 2026-10-18 摘掉联网流水钩子
+        self._stop_fatgui()               # ---- [FATGUI v1] ----
         try:
             if getattr(self, "_logcon", None) is not None:
                 self._logcon.close()      # ★ [CONLOG] 收掉日志宿主进程
@@ -1214,6 +1257,9 @@ if __name__ == "__main__":
     # ------------------------------------------------------------ 界面
     def _build(self):
         r = self.root
+        # ★ 2026-10-18：记下 Tk 线程身份 —— 联网流水要判断"我此刻在不在 Tk 线程里"，
+        #   在就就地处理（零延迟），不在就只能排队（碰控件必崩）。
+        self._tk_ident = threading.current_thread().ident
         r.title(self.title)
         r.configure(bg=THEME["bg"])
         # 字大了以后照旧开 880x660 会显得挤，相应放宽（2026-10-02）
@@ -1282,6 +1328,21 @@ if __name__ == "__main__":
                                   fg=THEME["text_dim"], font=FONT_UI_S,
                                   anchor="e")
         self._lbl_spin.pack(side="right")
+        # ★ 2026-10-18：中间常驻「本轮已用」。夹在「联网状态」与「转圈」之间。
+        #   数据来自 net_balance.session_info()，纯内存读，定时器开销可忽略。
+        self._lbl_spent = tk.Label(strip, text="", bg=THEME["panel"],
+                                   fg=THEME["text_dim"], font=FONT_UI_S,
+                                   anchor="w")
+        self._lbl_spent.pack(side="left", padx=(14, 6))
+        # ★ 2026-10-18：定时器必须在**标签建好之后**再启动。
+        #   踩过的坑：一开始把启动放在 _build_editor 里，可它在第 1294 行就跑完了，
+        #   那时这个标签还没创建；随后下面那行又把句柄重置成 None ——
+        #   结果是「定时器在跑，但句柄丢了」：自测断言失败，重建视图时还会叠一个。
+        #   所以：① 句柄只在首次出现时初始化，不重复清空；② 启动放在 pack 之后。
+        if not hasattr(self, "_spent_tick_id"):
+            self._spent_tick_id = None
+        if self._spent_tick_id is None:
+            self._spent_tick()
 
         # ---- 工具栏（古早 QQ 风：表情 + 附件等按钮**并列一行**）----
         bar = tk.Frame(bottom, bg=THEME["panel"])
@@ -1428,6 +1489,119 @@ if __name__ == "__main__":
                          else {"log": self.log_painter})
         self._tagged.clear()
 
+    # ============================================ [FATGUI v1] 功能栏 + 监控引擎
+    # 由 patch_gui.py 注入；卸载：再跑一次该脚本 --revert
+    # 设计原则：**整段 try** —— 这是界面装饰，任何异常都不许拖垮主程序。
+
+    def _start_fatgui(self):
+        """挂右侧「📋 功能栏」，接上 QQ 钩子，并启动按开关自动启停的监控引擎。"""
+        self._fatgui_side = None
+        self._fatgui_auto = None
+        try:
+            import sys as _sys
+            _ws = os.path.join(os.path.dirname(os.path.abspath(__file__)), "workspace")
+            _fp = os.path.join(_ws, "fatgui")
+            # ⚠️ append，不要 insert(0) —— workspace 里有旧的同名 chat_window.py
+            if os.path.isdir(_fp) and _fp not in _sys.path:
+                _sys.path.append(_fp)
+
+            import ctl as _ctl
+            from sidebar import SidePanel, InlineMenu
+            import engine as _eng
+
+            _ctl.ensure_registered()
+            self._fatgui_bind_qq(_ctl)          # 接「遥控」那一联
+
+            self._fatgui_side = SidePanel(
+                self.root,
+                host=getattr(self, "_tbar", None),
+                anchor=getattr(self, "_tgl", None),
+                layout="inline",
+                logger=self._fatgui_say)
+
+            # ★ 2026-10-18 23:11 用户纠正：「联网」要与「布局」「功能」**并列**
+            #   → 顶栏第三个两字按钮，排在「功能」右边；浮层就是联网域的 5 个开关。
+            #   位置链路：布局(_tgl) → 功能(SidePanel.strip) → 联网(InlineMenu.strip)
+            #   单独 try：菜单建失败也不能把功能抽屉一起拖下水。
+            try:
+                self._net_menu = InlineMenu(
+                    self.root,
+                    host=getattr(self, "_tbar", None),
+                    anchor=getattr(self._fatgui_side, "strip", None),
+                    # ★ 2026-10-18：这个板块现在管的是「联网怎么调度」——
+                    #   要不要联网 / 判断方式 / 检索模式 / 用哪几个后端 / 怎么路由 /
+                    #   怎么融合 / 还剩多少额度。全是调度，故命名为〔调度〕。
+                    #   （曾用名：联网 → 网络；.env 里 NETBAL_BTN_LABEL 可覆盖，默认「调度」）
+                    text=(os.environ.get("NETBAL_BTN_LABEL") or "调度"),
+                    rows=self._net_menu_rows,
+                    pick=self._net_cycle,
+                    footer=self._net_menu_footer,
+                    on_open=self._net_menu_open,
+                    logger=self._fatgui_say)
+            except Exception:
+                self._net_menu = None
+
+            # 监控引擎：按 mon_on / mon_news_on 自动启停（与界面解耦）
+            self._fatgui_auto = _eng.AutoRunner(
+                watchlist=os.path.join(_fp, "watchlist.txt"),
+                on_event=self._fatgui_on_event,
+                log=self._fatgui_say)
+            self._fatgui_auto.start()
+        except Exception:
+            self._fatgui_side = None
+            self._fatgui_auto = None
+
+    def _stop_fatgui(self):
+        """停车 + 销毁抽屉。任何异常都吞掉（关窗路径不能抛）。"""
+        for name, fn in (("_fatgui_auto", "stop"), ("_fatgui_side", "destroy"),
+                         ("_net_menu", "destroy")):
+            obj = getattr(self, name, None)
+            try:
+                if obj is not None and hasattr(obj, fn):
+                    getattr(obj, fn)()
+            except Exception:
+                pass
+            setattr(self, name, None)
+
+    def _fatgui_bind_qq(self, _ctl):
+        """把 QQ 跟随模式的**活状态**接到抽屉上。
+
+        QQ 状态不在 settings 里，而在 fatfish_core.qqmode._QQ 这个字典上，
+        所以用 runtime 钩子转发（见 fatgui/ctl.py 的 set_runtime）。
+        """
+        try:
+            from fatfish_core import qqmode as _qm
+        except Exception:
+            return
+        _M = {"qq_on": "on", "qq_readpw": "others_read_needs_pw",
+              "qq_pw_enable": "pw_enable"}
+
+        def _get(k):
+            return _QQ_GET(_qm, _M, k)
+
+        def _set(k, v):
+            return _QQ_SET(_qm, _M, k, v)
+
+        _ctl.set_runtime(get=_get, set=_set)
+
+    def _fatgui_say(self, text):
+        """抽屉里的动作 → 状态面板 + 控制台。绝不抛。"""
+        try:
+            push_status(str(text))
+        except Exception:
+            pass
+        try:
+            print("  [功能栏] %s" % text)
+        except Exception:
+            pass
+
+    def _fatgui_on_event(self, ev):
+        """监控引擎产出的事件 → 状态面板留痕。绝不抛。"""
+        try:
+            push_status(ev.text(with_analysis=False))
+        except Exception:
+            pass
+
     def _build_editor(self, r):
         """编辑器组式布局：工具栏 + 可自由分屏的组树 + 布局状态栏。"""
         self._main_body = tk.Frame(r, bg=THEME["bg"])
@@ -1439,6 +1613,11 @@ if __name__ == "__main__":
         self._bind_layout_keys()          # ★ Ctrl+L 钉住 / 取消钉住
         self._start_hover_watch()         # ★ 鼠标悬停展开 / 移开收缩
         self._start_exec_tail()           # ★ [P1c] 监控面板数据源
+        self._net_bind_hook()             # ★ 2026-10-18 联网流水钩子（幂等）
+        # 注：「本轮已用」的定时器不在这里启动 —— 本方法在第 1294 行就执行完了，
+        #     而状态条标签要到 `_build()` 后半段才创建。启动点见 _build() 里
+        #     `self._lbl_spent.pack(...)` 之后。
+        self._start_fatgui()              # ---- [FATGUI v1] 功能栏 + 监控引擎 ----
 
     # ---------------------------------------------------------- 视图重建
     def _panel_style(self, panel):
@@ -1483,6 +1662,8 @@ if __name__ == "__main__":
             self.exec_painter = None
             self.status_text = None          # ★ [P1c]
             self.status_painter = None
+            # ★ 2026-10-18：[联网] 已不是面板 —— 重建视图时只需把菜单数值刷一遍
+            self._net_menu_refresh()
             self.painters.clear()            # ★ [P1c]
             self.inner = None
             self._tagged.clear()
@@ -1760,6 +1941,350 @@ if __name__ == "__main__":
             pass
         return txt
 
+    # ------------------------------------- ★ 2026-10-18 「🌐 联网」顶栏菜单
+    #  用户 2026-10-18 23:11 纠正原话：
+    #     「我意思是把联网窗口做到和布局和功能并列，结果给我写成大框了」
+    #  → 联网域**不再是一个可停靠面板**（面板 = 大框，要吃版面），
+    #     而是顶栏上第三个两字按钮：〔布局〕〔功能〕〔联网〕。
+    #     悬停 → 按钮正下方飞出 5 行；点一行 = 循环到下一档。
+    #
+    #  三条设计约束（每条都对应一个踩过的坑）：
+    #    ① 读写**只走 settings**，绝不另存一份状态 —— 否则会出现
+    #       「菜单显示 auto、实际跑的是 tavily」这种鬼故事（fatgui README 明令禁止）。
+    #    ② 用量是 SQLite 查询，必须节流（5 秒），不能每帧都算。
+    #    ③ 流水可能来自**后台线程**（net_tools 的钩子），必须回 Tk 线程再碰界面。
+    _NET_QUOTA_TTL = 5.0
+
+    def _net_settings(self):
+        """延迟导入 settings（不联网的时候别为它拖慢启动）。"""
+        try:
+            import settings as _st
+            return _st
+        except Exception:
+            return None
+
+    def _net_tools_mod(self):
+        try:
+            import net_tools as _nt
+            return _nt
+        except Exception:
+            return None
+
+    def _net_menu_spec(self):
+        """菜单清单：(settings 键, 中文名, 候选值, 候选值短名)。
+
+        ★ 5 项 = 联网域的全部可调项。前两项（判断/检索）原在功能抽屉的
+          「🌐 联网」联里；后三项（后端/路由/合并）是 2026-10-18 多后端那轮
+          新加的。现在它们统一挂在顶栏「联网」按钮的浮层里。
+        """
+        return (
+            ("net_mode", "联网", ("on", "off", "auto", "ai"),
+             {"on": "总开", "off": "总关", "auto": "规则", "ai": "AI判"}),
+            ("tavily_mode", "检索", ("auto", "search", "extract", "both"),
+             {"auto": "auto", "search": "只搜", "extract": "抓正文", "both": "先搜再抓"}),
+            ("net_backends", "后端",
+             ("auto", "deepseek,tavily", "deepseek", "tavily", ""),
+             {"auto": "auto", "deepseek,tavily": "两个", "deepseek": "官方",
+              "tavily": "Tavily", "": "关"}),
+            ("backend_router", "路由", ("ai", "rule", "off"),
+             {"ai": "AI", "rule": "规则", "off": "固定"}),
+            ("net_merge", "合并", ("rrf", "score", "none"),
+             {"rrf": "RRF", "score": "分数", "none": "不合并"}),
+        )
+
+    _NET_ATTR = {"net_backends": "NET_BACKENDS",
+                 "backend_router": "NET_BACKEND_ROUTER",
+                 "net_merge": "NET_MERGE",
+                 "net_mode": "NET_MODE",
+                 "tavily_mode": "TAVILY_MODE"}
+
+    def _net_read(self, key, default=""):
+        """读当前值：**settings → .env(os.environ) → net_tools 属性**，三段都要看。
+
+        ★ 为什么不能只看 net_tools：主程序启动时才把 .env 的值 apply 到 net_tools
+          并把这几项登记进 settings；而**独立跑**（demo / 探针 / 只开 GUI）时
+          settings 里没有这几个记录，net_tools 上还是模块默认值 ——
+          只看它就会出现「菜单显示 关、实际跑的是 auto」这种鬼故事。
+        ★ 为什么 settings 仍排第一：界面改值走 settings.set()，它才是应用内的真源。
+        """
+        st = self._net_settings()
+        if st is not None:
+            try:
+                v = st.get(key)
+                if v is not None:
+                    return str(v)
+            except Exception:
+                pass
+        try:
+            _ev = os.environ.get(self._NET_ATTR.get(key, key.upper()))
+            if _ev is not None and str(_ev).strip() != "":
+                return str(_ev).strip()
+        except Exception:
+            pass
+        nt = self._net_tools_mod()
+        if nt is not None:
+            try:
+                return str(getattr(nt, self._NET_ATTR.get(key, key), default) or "")
+            except Exception:
+                pass
+        return default
+
+    # ---------------------------------------------------- 菜单内容（数据源）
+    def _net_menu_rows(self):
+        """InlineMenu 的 rows()：[(key, 标签, 当前值短名), ...]。"""
+        out = []
+        try:
+            for key, label, opts, short in self._net_menu_spec():
+                cur = self._net_read(key, opts[0])
+                if cur not in opts:            # 值不在档位里 → 按首档显示，绝不假装正常
+                    cur = opts[0]
+                out.append((key, label, short.get(cur, cur or "关")))
+        except Exception:
+            pass
+        return out
+
+    def _net_menu_footer(self):
+        """浮层底部小字：上次走了哪些后端 · 最近一次调用 · 本月用量 · 操作提示。"""
+        out = []
+        try:
+            nt = self._net_tools_mod()
+            last = list(getattr(nt, "last_backends", None) or [])
+        except Exception:
+            last = []
+        out.append("上次：%s" % ("、".join(last) if last else "（本轮尚未联网）"))
+        try:
+            buf = self.data.get("net") or []
+            if buf:
+                out.append("最近：" + str(buf[-1]).strip())
+        except Exception:
+            pass
+        q = self._net_quota_text()
+        if q:
+            out.append(q)
+        # ★ 2026-10-18：余额段 —— 官方口径（DeepSeek 元 / Tavily credit）
+        #   读 net_balance 的磁盘缓存（allow_net=False），绝不联网、绝不阻塞 Tk。
+        for _ln in self._net_balance_lines():
+            out.append(_ln)
+        out.append("点一行 = 下一档 · 改动仅本次运行生效（要固化请 /set save）")
+        return out
+
+    def _net_menu_refresh(self):
+        """外部改了值之后刷菜单（菜单没开就什么都不做 —— 打开时现读）。"""
+        m = getattr(self, "_net_menu", None)
+        if m is not None:
+            try:
+                m.refresh()
+            except Exception:
+                pass
+
+    def _net_menu_open(self):
+        """浮层刚弹出：作废用量缓存，免得显示 5 秒前的旧账。"""
+        self._net_quota_cache = None
+        self._net_menu_refresh()
+
+    def _net_quota_text(self):
+        """一行用量摘要（5 秒节流 —— 底下是 SQLite 查询，不能每帧都算）。"""
+        now = time.time()
+        cache = getattr(self, "_net_quota_cache", None)
+        if cache is not None and (now - cache[1]) < self._NET_QUOTA_TTL:
+            return cache[0]
+        txt = ""
+        try:
+            # ★ workspace/deepseek_search 不是顶层包：net_tools._load_ds() 会先把
+            #   workspace 塞进 sys.path 再 import（同一份实例，别重复导入）。
+            _ntq = self._net_tools_mod()
+            _load = getattr(_ntq, "_load_ds", None) if _ntq is not None else None
+            _ds = _load() if _load is not None else None
+            if _ds is None:
+                import deepseek_search as _ds      # 兜底：环境里本来就能 import
+            data = _ds.quota.usage() or {}
+            parts = []
+            for name in sorted(data):
+                u = data[name] or {}
+                # 「官方 Search/Fetch」→「官方」；「Tavily」原样（一行小字要短）
+                lbl = str(u.get("label") or name)
+                for _sep in (" ", "/"):
+                    lbl = lbl.split(_sep)[0]
+                lbl = lbl[:10]
+                n = int(u.get("units") or 0)
+                free = u.get("free_monthly") or 0
+                cost = float(u.get("cost_yuan") or 0.0)
+                if cost:
+                    parts.append("%s %d次 %.3f元" % (lbl, n, cost))
+                elif free:
+                    parts.append("%s %d次（免费 %d/月）" % (lbl, n, int(free)))
+                else:
+                    parts.append("%s %d次" % (lbl, n))
+            txt = ("本月 " + " · ".join(parts)) if parts else "本月尚无检索记录"
+        except Exception:
+            txt = ""
+        self._net_quota_cache = (txt, now)
+        return txt
+
+    def _net_balance_lines(self):
+        """余额行（2026-10-18 新增）：官方余额 + 对账差额 + 吃紧提醒。
+
+        ★ 只读 net_balance 的**磁盘缓存**（allow_net=False）——
+          浮层随时可能重绘，绝不能在这里发网络请求，否则整个窗口会卡死。
+        ★ 任何异常都吞掉：余额是附加信息，坏了也不能让菜单打不开。
+        """
+        try:
+            import net_balance as _nb
+        except Exception:
+            return []
+        out = []
+        try:
+            snap = _nb.snapshot(allow_net=False)
+            g = _nb.grade(snap=snap)
+            ds = snap.get("deepseek") or {}
+            tv = snap.get("tavily") or {}
+            if ds.get("ok"):
+                out.append("余额 DeepSeek %s %s"
+                           % (_nb._fmt_money(ds.get("total")),
+                              _nb.LEVEL_ICON.get(g["deepseek"][0], "")))
+            if tv.get("ok"):
+                out.append("余额 Tavily %s/%s 剩 %s %s"
+                           % (tv.get("plan_used"), tv.get("plan_limit"),
+                              tv.get("left"), _nb.LEVEL_ICON.get(g["tavily"][0], "")))
+            if not (ds.get("ok") or tv.get("ok")):
+                out.append("余额 未取到（.env 里 NETBAL_SHOW=0 可关掉这层）")
+                return out
+            for a in _nb.alarms(snap=snap):
+                if a.get("level") in ("warn", "crit", "dead"):
+                    out.append("%s %s" % (_nb.LEVEL_ICON.get(a["level"], ""),
+                                          a["text"]))
+            out.append("更新 %s" % _nb._ago(snap.get("ts")))
+        except Exception:
+            return out
+        return out
+
+    def _net_cycle(self, key):
+        """循环切换一个枚举（菜单点了就调它），并同步状态栏。"""
+        spec = {k: (o, sh) for k, _lb, o, sh in self._net_menu_spec()}
+        if key not in spec:
+            return
+        opts, short = spec[key]
+        cur = self._net_read(key, opts[0])
+        try:
+            i = list(opts).index(cur)
+        except ValueError:
+            i = -1
+        nxt = opts[(i + 1) % len(opts)]
+        st = self._net_settings()
+        ok = False
+        if st is not None:
+            try:
+                ok = bool(st.set(key, nxt)[0])
+            except Exception:
+                ok = False
+        if not ok:
+            # settings 不在（独立跑 / 演示 / 该键没注册）：改模块属性，菜单仍可操作。
+            # 先试 setter 函数，没有再直接赋属性 —— 有的键只有属性没有 setter。
+            nt = self._net_tools_mod()
+            if nt is not None:
+                attr = self._NET_ATTR.get(key, key)
+                fn = getattr(nt, {"net_backends": "set_backends",
+                                  "backend_router": "set_backend_router",
+                                  "net_merge": "set_merge"}.get(key, ""), None)
+                try:
+                    if fn is not None:
+                        fn(nxt)
+                    else:
+                        setattr(nt, attr, nxt)
+                except Exception:
+                    try:
+                        setattr(nt, attr, nxt)
+                    except Exception:
+                        pass
+            # ★ 顺手把**进程内**的 os.environ 同步一份：settings 没登记这几个键时，
+            #   _net_read 的第二段就是 os.environ —— 不同步会导致"改完还是原值"（假死）。
+            #   只改进程环境，**不碰 .env 文件**（要固化仍然走 /set save）。
+            try:
+                _ek = self._NET_ATTR.get(key, key.upper())
+                if _ek:
+                    os.environ[_ek] = str(nxt)
+            except Exception:
+                pass
+        self._net_menu_refresh()
+        try:
+            label = next((lb for k, lb, _o, _s in self._net_menu_spec() if k == key), key)
+            push_status("🌐 联网 · %s → %s" % (label, short.get(nxt, nxt or "关")))
+        except Exception:
+            pass
+
+    # ---- 流水钩子：net_tools.web_search → 数据层（不再有面板，只喂菜单小字）----
+    def _net_flow_apply(self, line):
+        """把一条流水写进数据层（只留最近 200 条）并刷菜单。**必须**在 Tk 线程里调。"""
+        try:
+            buf = self.data.setdefault("net", [])
+            buf.append(line + "\n")
+            if len(buf) > 200:
+                del buf[:-200]
+            self._net_menu_refresh()
+            # ★ 2026-10-18：一次联网刚落账 → 立刻把「本轮已用」推上去。
+            #   余额刷新是后台线程在跑，这里先按当前值更新一次；
+            #   后台抓到新余额后，下一次 4 秒轮询会自动跟上。
+            self._spent_kick()
+        except Exception:
+            pass
+
+    def _net_on_activity(self, info):
+        """接收一次联网打点（**可能来自后台线程**）。
+
+        ★★ 这里是最容易翻车的地方，两种做法都不能碰：
+          · 不能直接 insert 控件 —— Tk 非线程安全，会 0xC0000409；
+          · **也不能调 root.after** —— after 本身同样是 Tk 调用，跨线程一样不安全。
+            （自测里就是这么炸的：after 抛异常被吞掉，数据干脆没入账，
+              而表面看起来"没报错"，最难查。）
+          正确做法：同线程就地处理；异线程只 put 进 queue.Queue
+          （queue 是标准库保证线程安全的），由 Tk 线程的 _poll 取走处理。
+        """
+        if not isinstance(info, dict):
+            return
+        try:
+            line = "%s  %-8s %-6s %2d 条  %.1fs%s" % (
+                time.strftime("%H:%M:%S"),
+                str(info.get("backend") or "?")[:8],
+                str(info.get("mode") or "search")[:6],
+                int(info.get("n") or 0),
+                float(info.get("secs") or 0.0),
+                "" if info.get("ok", True) else "  ⚠️失败")
+        except Exception:
+            return
+        if threading.current_thread().ident == getattr(self, "_tk_ident", None):
+            self._net_flow_apply(line)          # 就在 Tk 线程：直接办
+            return
+        try:                                     # 后台线程：只能排队
+            IN_Q.put({"kind": "netflow", "line": line})
+        except Exception:
+            pass
+
+    def _net_bind_hook(self):
+        """把 net_tools 的打点钩子接到本窗口（幂等）。"""
+        if getattr(self, "_net_hook_bound", False):
+            return
+        nt = self._net_tools_mod()
+        if nt is None:
+            return
+        try:
+            fn = getattr(nt, "set_net_hook", None)
+            if fn is not None:
+                fn(self._net_on_activity)
+                self._net_hook_bound = True
+        except Exception:
+            pass
+
+    def _net_unbind_hook(self):
+        """关窗前摘掉钩子 —— 否则窗口销毁后仍有线程回调过来。"""
+        try:
+            nt = self._net_tools_mod()
+            fn = getattr(nt, "set_net_hook", None) if nt is not None else None
+            if fn is not None:
+                fn(None)
+        except Exception:
+            pass
+        self._net_hook_bound = False
+
     # ---------------------------------------------------------- 浮动窗
     def _sync_floats(self):
         """让浮动窗与模型保持一致：已停靠回来的销毁；仍在浮动的刷新内容。"""
@@ -1882,7 +2407,10 @@ if __name__ == "__main__":
              fg=THEME.get("abort_fg") or THEME["text"])
         _sep()
         _head("面板（显示 / 隐藏）")
-        for p in LAYOUT_PANELS:
+        # ★ 2026-10-18 23:11：联网已改回顶栏按钮（不再有 net 面板），
+        #   ALL 与 PANELS 现在一样；这里仍按 ALL 遍历 —— 以后真有「默认隐藏的
+        #   面板」时，本菜单就是用户打开它的**唯一入口**，不必再改这行。
+        for p in LAYOUT_ALL_PANELS:
             vis = self.model.group_of(p) is not None or p in self.floats
             _row(" %s %s" % ("✓" if vis else "　", PANEL_LABELS.get(p, p)),
                  lambda pp=p: self._toggle_panel(pp))
@@ -1932,13 +2460,22 @@ if __name__ == "__main__":
         except Exception:
             pass
 
-    def _pointer_in_bar(self, pad=6):
-        """鼠标是否停在**布局栏**或**弹层菜单**上（含宽容带，防边界抖动）。"""
+    def _pointer_in_bar(self, pad=5):
+        """鼠标是否停在**「布局」按钮那一小块**或**弹层菜单**上（含 5px 宽容带防抖）。
+
+        ★ 2026-10-07 用户要求：「不要把布局判定区搞那么宽，就限定在布局那一小块」。
+          旧实现把 `self._tbar`（顶栏 Frame，`pack(fill="x")` → **整行宽**）也算作命中区，
+          于是鼠标扫过顶栏任意位置（模型名、右侧布局摘要、空白处）都会弹出菜单。
+          现在只认**按钮本身** —— 该属性名已核实存在（`_toolbar()` 里
+          `self._tgl = tk.Button(bar, text="布局", ...)`；`_refresh_tgl()` 亦在用），
+          并保留 `getattr(..., None)` 兜底：万一属性缺失只会"不弹"，不会抛异常。
+          弹层仍算命中，否则鼠标从按钮移进菜单的路上就会把它关掉。
+        """
         try:
             px, py = self.root.winfo_pointerxy()
         except Exception:
             return False
-        for w in (getattr(self, "_tbar", None), getattr(self, "_tbar_pop", None)):
+        for w in (getattr(self, "_tgl", None), getattr(self, "_tbar_pop", None)):
             if w is None:
                 continue
             try:
@@ -2199,13 +2736,15 @@ if __name__ == "__main__":
             self._split(a[1], (a[2] if len(a) > 2 and a[2] in ("h", "v") else "h"))
             return "📐 已拆分 %s：%s" % (a[1], self.layout_dump())
         if cmd == "detach":
-            if len(a) < 2 or a[1] not in LAYOUT_PANELS:
-                return "⚠️  用法：/layout detach <面板>；面板：%s" % ", ".join(LAYOUT_PANELS)
+            # ★ 2026-10-18：用 ALL（含 net）—— 否则 /layout detach net 会被拒，
+            #   而 net 默认隐藏，这条就是**唯一的拉出入口**。
+            if len(a) < 2 or a[1] not in LAYOUT_ALL_PANELS:
+                return "⚠️  用法：/layout detach <面板>；面板：%s" % ", ".join(LAYOUT_ALL_PANELS)
             self._detach(a[1])
             return "📐 已独立成窗 %s：%s" % (a[1], self.layout_dump())
         if cmd == "dock":
-            if len(a) < 2 or a[1] not in LAYOUT_PANELS:
-                return "⚠️  用法：/layout dock <面板>；面板：%s" % ", ".join(LAYOUT_PANELS)
+            if len(a) < 2 or a[1] not in LAYOUT_ALL_PANELS:
+                return "⚠️  用法：/layout dock <面板>；面板：%s" % ", ".join(LAYOUT_ALL_PANELS)
             self._dock(a[1])
             return "📐 已停靠 %s：%s" % (a[1], self.layout_dump())
         return "⚠️  未知子命令 %r。可用：preset | split | detach | dock | reset" % cmd
@@ -2398,6 +2937,99 @@ if __name__ == "__main__":
             pass
 
     # ------------------------------------------ 状态条：联网状态 + 转圈
+    # ------------------------------------------ ★ 本轮已用（常驻小字）
+    _SPENT_TICK_MS = 4000
+
+    def _spent_tick(self):
+        """每 4 秒刷一次「本轮已用」。
+
+        ★ 只调 net_balance.session_info() —— 纯内存读取，不碰网络、几乎不碰磁盘，
+          所以这个定时器可以常驻，不会像查余额那样阻塞 Tk。
+        ★ 任何异常都吞掉并停止自调度，绝不把窗口拖垮。
+        """
+        # 窗口没了就停（否则 Tk 销毁后会甩出 "invalid command name ..." 的噪音）。
+        #   ★ 这里查的是 **root 还在不在**，不是 self.alive ——
+        #     alive 要等 start() 才置真，而 _build() 阶段它还是 False，
+        #     用 alive 判断会把「首次启动」也一并拦掉（踩过）。
+        try:
+            if not self.root.winfo_exists():
+                self._spent_tick_id = None
+                return
+        except Exception:
+            self._spent_tick_id = None
+            return
+        try:
+            import net_balance as _nb
+            # ★ v1.2.3：每 4 秒顺手催一次余额刷新。
+            #   要不要真发请求由 net_balance 的节流决定（NETBAL_CACHE_TTL，出厂 60 秒），
+            #   所以 tick 再快也不会打风暴；fetch 在 daemon 线程里跑，不阻塞 Tk。
+            #   ★ 内层必须单独 try：外层那个 except 会把整个定时器停掉，
+            #     不能让一次刷新失败把标签弄死。
+            try:
+                _nb.refresh_async()
+            except Exception:
+                pass
+            txt = _nb.spent_line()
+            lbl = getattr(self, "_lbl_spent", None)
+            if lbl is not None and lbl.winfo_exists():
+                lbl.configure(text=txt or "")
+        except Exception:
+            self._spent_tick_id = None
+            return
+        try:
+            self._spent_tick_id = self.root.after(self._SPENT_TICK_MS, self._spent_tick)
+        except Exception:
+            self._spent_tick_id = None
+
+    def _spent_stop(self):
+        """关窗时取消待触发的定时器（幂等、绝不抛）。"""
+        tid = getattr(self, "_spent_tick_id", None)
+        self._spent_tick_id = None
+        if not tid:
+            return
+        try:
+            self.root.after_cancel(tid)
+        except Exception:
+            pass
+
+    def _spent_kick(self):
+        """外部主动催一次（联网完成 / 余额刷新后）—— 让数字即时跳，不等下个 4 秒。"""
+        try:
+            lbl = getattr(self, "_lbl_spent", None)
+            if lbl is not None and lbl.winfo_exists():
+                import net_balance as _nb
+                lbl.configure(text=_nb.spent_line() or "")
+        except Exception:
+            pass
+
+    def _spent_round_end(self):
+        """★ v1.2.3：一轮输出结束 —— 立刻对账，不等 4 秒 tick、不等 60 秒节流。
+
+        与 `_spent_tick` 的分工：
+          · `_spent_tick`   每 4 秒读一次「已经在内存里的」数字（便宜）；
+          · `_spent_round_end` 每轮结束后**插队**去抓一次新余额（min_interval=0）。
+
+        为什么要 after 补刷：`refresh_async` 是 daemon 线程，调用当即返回，
+        此刻 `last_total` 还是旧值；1.5 秒后抓取基本已落盘，再刷一次才看得见跳数。
+        （同一时刻只保留一个补刷，反复取消重排，不堆积。）
+        """
+        try:
+            import net_balance as _nb
+            try:
+                _nb.refresh_async(min_interval=0)      # 内部保底 5 秒防抖
+            except Exception:
+                pass
+            self._spent_kick()                          # 先用现有值刷一次
+            tid = getattr(self, "_spent_round_after", None)
+            if tid is not None:
+                try:
+                    self.root.after_cancel(tid)
+                except Exception:
+                    pass
+            self._spent_round_after = self.root.after(1500, self._spent_kick)
+        except Exception:
+            pass
+
     def set_net_status(self, text):
         """左格：联网搜索状态（🌐 正在联网搜索… / 🔍 需要联网 / ⛔ 无需联网）。"""
         try:
@@ -2866,6 +3498,10 @@ if __name__ == "__main__":
         if not st:
             return 0
         self._stream = None
+        # ★ v1.2.3：每轮输出结束 → 立刻对一次账。
+        #   放在这里而不是方法末尾：本方法后面有多处提前 return（面板不在前台 /
+        #   控件已销毁），但「这一轮说完了」这个事实在哪儿都成立。
+        self._spent_round_end()
         item = st.get("item")
         meta = None
         if item is not None and len(item) > 2 and isinstance(item[2], dict):
@@ -3401,6 +4037,10 @@ if __name__ == "__main__":
                     self.stream_end(aborted=bool(item.get("aborted")))
                 elif k == "net":
                     self.set_net_status(item.get("text", ""))
+                elif k == "netflow":
+                    # ★ 2026-10-18：联网流水。后台线程不放直接碰控件，
+                    #   统一经 IN_Q 转交到这里，由 Tk 线程落地。
+                    self._net_flow_apply(item.get("line", ""))
                 elif k == "spin_begin":
                     self.spin_begin(item.get("label"))
                 elif k == "spin_label":
@@ -4437,6 +5077,142 @@ def _selftest():
                   str(_bad.all_panels()))
         except Exception as _e:
             check("★ UI_LAYOUT 坏数据自动降级 + 记原因", False, repr(_e))
+        # ------------------------------------------------ [24] ★ 2026-10-18（23:11 纠正）
+        print("[24] ★ 「联网」= 顶栏第三个按钮（与「布局」「功能」并列，不是面板）")
+        check("★ net 已不是面板名（大框拆掉了）",
+              "net" not in LAYOUT_ALL_PANELS and "net" not in PANEL_LABELS,
+              str(LAYOUT_ALL_PANELS))
+        check("★ /layout 也不认 net（不会被 .env 旧数据拉回来）",
+              w2.model.dock("net") is False)
+        _nm = getattr(w2, "_net_menu", None)
+        check("★ 顶栏「联网」按钮已建",
+              _nm is not None and getattr(_nm, "_btn", None) is not None)
+        _tgl = getattr(w2, "_tgl", None)
+        _fun = getattr(getattr(w2, "_fatgui_side", None), "strip", None)
+        _netb = getattr(_nm, "strip", None)
+        check("★ 三个按钮都在、同一个顶栏容器",
+              all(w is not None and w.winfo_exists() for w in (_tgl, _fun, _netb))
+              and _tgl.master is _fun.master is _netb.master,
+              "tgl=%s fun=%s net=%s" % (getattr(_tgl, "master", None),
+                                        getattr(_fun, "master", None),
+                                        getattr(_netb, "master", None)))
+        root.update()
+        # ★ 位置用 **pack 顺序**判定 —— 自测窗口常常是 withdraw 的，未映射时
+        #   winfo_rootx() 一律返回 0，拿像素比大小等于没测（上一版就这么假绿过）。
+        _tbar_h = getattr(_tgl, "master", None)
+        _kids = [str(w) for w in _tbar_h.pack_slaves()] if _tbar_h is not None else []
+        _ord = []
+        for _w in (_tgl, _fun, _netb):
+            try:
+                _ord.append(_kids.index(str(_w)))
+            except Exception:
+                _ord.append(-1)
+        check("★ 从左到右：布局 → 功能 → 联网（pack 顺序）",
+              -1 not in _ord and _ord[0] < _ord[1] < _ord[2],
+              "顺序=%s ／ 同容器子件=%s" % (_ord, _kids))
+        _ys = {}
+        for _n, _w in (("布局", _tgl), ("功能", _fun), ("联网", _netb)):
+            try:
+                _ys[_n] = int(_w.winfo_rooty())
+            except Exception:
+                _ys[_n] = None
+        _mapped = bool(_netb.winfo_ismapped() and _tgl.winfo_ismapped())
+        check("★ 三个按钮同一行（映射后实测 y；未映射按同一容器判定）",
+              (None not in _ys.values() and abs(_ys["布局"] - _ys["联网"]) <= 2)
+              if _mapped else (_netb.master is _tgl.master),
+              "y=%s mapped=%s" % (_ys, _mapped))
+        _want_lbl = os.environ.get("NETBAL_BTN_LABEL") or "调度"
+        check("★ 按钮文案是「%s」" % _want_lbl,
+              str(_nm._btn.cget("text")) == _want_lbl,
+              str(_nm._btn.cget("text")))
+
+        check("★ 菜单 5 行（联网域全部可调项）", len(w2._net_menu_rows()) == 5,
+              str(w2._net_menu_rows()))
+        check("★ 每行都有标签和当前值",
+              all(lb and vl for _k, lb, vl in w2._net_menu_rows()),
+              str(w2._net_menu_rows()))
+        _nm._open_panel()
+        root.update()
+        check("★ 悬停/点击能弹出浮层",
+              _nm._open and _nm._ov is not None and _nm._ov.winfo_exists())
+        check("★ 浮层里正好 5 行控件", len(_nm._row_widgets) == 5,
+              str(len(_nm._row_widgets)))
+        _gw = int(_nm._ov.winfo_width()) if _nm._ov is not None else 0
+        _gh = int(_nm._ov.winfo_height()) if _nm._ov is not None else 0
+        check("★ 浮层尺寸按内容算（不是写死的大框）",
+              0 < _gw <= 640 and 0 < _gh <= 420, "%sx%s" % (_gw, _gh))
+        _bottom = _netb.winfo_rooty() + _netb.winfo_height()
+        check("★ 浮层挂在按钮正下方",
+              _nm._ov.winfo_rooty() >= _bottom - 1,
+              "ov_y=%s btn_bottom=%s" % (_nm._ov.winfo_rooty(), _bottom))
+        _nm._close_panel()
+        root.update()
+        check("★ 能收起来", _nm._open is False)
+
+        # 点一行 = 循环到下一档（改完自动还原，别把环境留给后面的断言）
+        _key = "backend_router"
+        _opts = dict((k, o) for k, _lb, o, _sh in w2._net_menu_spec())[_key]
+        _cur = w2._net_read(_key, _opts[0])
+        w2._net_cycle(_key)
+        _now = w2._net_read(_key, _opts[0])
+        check("★ 点一行 → 值切到下一档", _now != _cur, "%s: %s → %s" % (_key, _cur, _now))
+        # 还原：走同一条 _net_cycle 循环回去 —— **不假设 settings 一定注册了该键**
+        #（独立跑 / 自测环境里它可能只挂在 net_tools 模块上，直接 st.set 会静默失败，
+        #  于是把 off 留在进程里，后面的断言就跟着漂。）
+        for _ in range(len(_opts) - 1):
+            w2._net_cycle(_key)
+        check("★ 还原成功（不污染后续断言）", w2._net_read(_key, _opts[0]) == _cur,
+              "%s（原值 %r）" % (w2._net_read(_key, _opts[0]), _cur))
+
+        # 流水：后台线程 → 队列 → Tk 线程落地
+        _n0 = len(w2.data["net"])
+        w2._net_on_activity({"backend": "deepseek", "mode": "search",
+                             "n": 3, "secs": 1.2, "ok": True})
+        check("★ 联网流水仍进数据层", len(w2.data["net"]) == _n0 + 1,
+              str(w2.data["net"][-1:]))
+        check("★ 数据层只留最近 200 条（不会无限涨）",
+              len(w2.data["net"]) <= 200, str(len(w2.data["net"])))
+        _ft = w2._net_menu_footer()
+        check("★ 菜单底部能看到「上次 / 最近」",
+              any("上次" in s for s in _ft) and any("最近" in s for s in _ft), str(_ft))
+        w2._net_unbind_hook()
+        check("★ 解绑钩子不抛", w2._net_hook_bound is False)
+        w2._net_bind_hook()
+        w2._net_bind_hook()
+        check("★ 重复绑定幂等", w2._net_hook_bound is True)
+        # ---------- [25] ★ 本轮已用（状态条中间常驻的小字）
+        print("[25] ★ 本轮已用（状态条常驻）")
+        _sl = getattr(w2, "_lbl_spent", None)
+        check("★ 状态条已建「本轮已用」标签",
+              _sl is not None and _sl.winfo_exists())
+        check("★ 4 秒定时器已启动",
+              getattr(w2, "_spent_tick_id", None) is not None)
+        _ok_tick = True
+        try:
+            w2._spent_tick()
+        except Exception as _e:
+            _ok_tick = False
+            print("     tick 抛异常：", repr(_e))
+        check("★ _spent_tick 调用不抛", _ok_tick)
+        _ok_kick = True
+        try:
+            w2._spent_kick()
+        except Exception as _e:
+            _ok_kick = False
+            print("     kick 抛异常：", repr(_e))
+        check("★ _spent_kick 调用不抛", _ok_kick)
+        try:
+            _txt = str(_sl.cget("text")) if _sl is not None else ""
+        except Exception:
+            _txt = ""
+        check("★ 文案为「本轮已用 X.XX元」或空（无会话时不硬编数字）",
+              (_txt == "") or _txt.startswith("本轮已用 "), repr(_txt))
+
+        w2._net_unbind_hook()
+        _nm.destroy()
+        _nm.destroy()
+        check("★ 销毁幂等、不抛（关窗路径要能收尾）", True)
+
         try:
             for _w in list(w2.floats.values()):
                 _w.destroy()

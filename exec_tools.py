@@ -401,6 +401,71 @@ def _run_with_tee(cmd_args, work_dir, timeout, output_root=None):
     return proc.returncode, out_text, err_text, out_path, timed_out, aborted
 
 
+# ============ 命令方言预检（2026-10-19 新增）============
+# 为什么要在执行前扫一遍：
+#   这套工具在 Windows 上用 `cmd /c` 跑命令，但写命令的一方（AI）常在别处见过
+#   PowerShell / bash 写法，于是「Get-ChildItem」「$env:PATH」「rm -rf」这类
+#   必然报错的低级错误反复出现。事后看 stderr 才明白代价太高，所以在起进程之前
+#   先用正则扫一道，命中就把话说在前面。
+#
+# ★ 默认只**警告不阻断**（EXEC_SHELL_LINT=warn）：
+#   正则只是启发式，装了 Unix 工具的 Windows 也可能真能跑；
+#   宁可多一句提示，也不要因为误判把用户的命令拦下来。
+#   要严格可设 EXEC_SHELL_LINT=block（命中 error 直接拒绝执行）。
+_EXEC_LINT = {"tried": False, "mod": None}
+
+
+def _lint_module():
+    """延迟导入 system_facts（缺失就整层失效，不影响执行）。"""
+    if not _EXEC_LINT["tried"]:
+        _EXEC_LINT["tried"] = True
+        try:
+            here = os.path.dirname(os.path.abspath(__file__))
+            if here not in sys.path:
+                sys.path.insert(0, here)
+            import system_facts as _sf
+            _EXEC_LINT["mod"] = _sf
+        except Exception:
+            _EXEC_LINT["mod"] = None
+    return _EXEC_LINT["mod"]
+
+
+def lint_command(command):
+    """扫一条命令的 shell 方言。返回 (mode, issues)；任何失败都返回 ("off", [])。
+
+    mode: "off"（关闭/不可用）/ "warn"（默认，只提示）/ "block"（命中 error 就拒绝）
+    """
+    mode = (os.environ.get("EXEC_SHELL_LINT", "warn") or "warn").strip().lower()
+    if mode in ("0", "false", "off", "no"):
+        return "off", []
+    if mode not in ("warn", "block"):
+        mode = "warn"
+    sf = _lint_module()
+    if sf is None:
+        return "off", []
+    try:
+        return mode, sf.check_command(command)
+    except Exception:
+        return "off", []
+
+
+def _lint_text(command):
+    """把预检结果渲染成"附在输出前面"的提示块；无问题返回空串。"""
+    mode, issues = lint_command(command)
+    if not issues:
+        return ""
+    icon = {"error": "✗", "warn": "!", "info": "·"}
+    lines = ["⚠️ 命令方言预检（%s，执行前本地扫描）：" % (
+        "cmd.exe" if sys.platform == "win32" else "/bin/sh")]
+    for level, msg, fix in issues[:5]:
+        lines.append("   %s [%s] %s" % (icon.get(level, "·"),
+                                        {"error": "必然失败", "warn": "多半失败"}.get(level, level),
+                                        msg))
+        lines.append("        建议：%s" % fix)
+    lines.append("   （若命令确实跑通了，可忽略本提示；要关掉预检：set EXEC_SHELL_LINT=off）")
+    return "\n".join(lines)
+
+
 def run_cmd(command, workspace_root, cwd="", timeout=DEFAULT_TIMEOUT):
     """
     执行一条 CMD / Shell 命令。
@@ -421,6 +486,21 @@ def run_cmd(command, workspace_root, cwd="", timeout=DEFAULT_TIMEOUT):
     work_dir, err = _resolve_cwd(workspace_root, cwd)
     if work_dir is None:
         return False, err
+
+    # ★ 2026-10-19：执行前先做方言预检。
+    #   block 模式下：只要命中 error 就**不启动进程**，直接回一段可执行的修改建议
+    #   —— 比跑一遍拿到满屏报错、再让 AI 去猜要快得多。
+    _lint_mode, _lint_issues = lint_command(command)
+    if _lint_mode == "block":
+        _fatal = [x for x in _lint_issues if x[0] == "error"]
+        if _fatal:
+            _msg = ["⛔ 已拒绝执行（EXEC_SHELL_LINT=block，命中 %d 处必然失败的写法）：" % len(_fatal)]
+            for _lvl, _m, _fix in _fatal[:5]:
+                _msg.append("   ✗ %s" % _m)
+                _msg.append("        建议：%s" % _fix)
+            _msg.append("   命令：%s" % command)
+            _msg.append("   （确需照原样执行：set EXEC_SHELL_LINT=warn 或改成正确写法后重试）")
+            return False, "\n".join(_msg)
 
     # Windows 用 cmd /c，其他平台用 sh -c
     if sys.platform == "win32":
@@ -443,6 +523,10 @@ def run_cmd(command, workspace_root, cwd="", timeout=DEFAULT_TIMEOUT):
         return False, f"命令超时（>{timeout}s）已被终止：{command}"
 
     parts = [f"$ {command}", f"（工作目录：{work_dir}）", f"退出码：{rc}"]
+    # ★ 2026-10-19：把预检提示挂到输出最前面（warn 模式下命令照常跑了，附一句解释）
+    _lint_note = _lint_text(command)
+    if _lint_note:
+        parts.append(_lint_note)
     if out_path:
         parts.append(f"（实时输出文件：{out_path}）")
     if out:

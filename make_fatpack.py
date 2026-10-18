@@ -83,7 +83,7 @@ import hashlib
 #    核对办法：python make_fatpack.py --manifest（会顺带跑一次审计）。
 EMBED = [
     # ---- 主程序与核心模块 ----
-    "FATHFISHI.py",            # 主程序
+    "FATHFISHII.py",           # 主程序
     "ui_core.py",             # 展示层（颜色/标记/横幅/等待动画/签名）
     "verify_tools.py",        # 双人核验引擎
     "settings.py",            # 参数中心 /set
@@ -98,6 +98,15 @@ EMBED = [
     "chat_window.py",         # ★ 2026-10-02 新增：对话窗口 / 操作台
     "stream_core.py",         # ★ 2026-10-02 新增：流式输出内核
     "launch.py",              # 启动枢纽（拿 PID / 拉监控器与状态台）
+    # ★ 2026-10-19 补漏（v1.2.3，由 audit_embed() 抓出）——
+    #   这两个是 2026-10-18 新增，漏了**主程序直接起不来**（裸 import，不是降级）：
+    #     · net_balance.py  ← FATHFISHII.py / chat_window.py / net_tools.py /
+    #                          boot_report.py 全都裸 import 它（「本轮已用」+ 额度层）
+    #     · system_facts.py ← boot_report.py / exec_tools.py / verify_tools.py 裸 import
+    #                          （开工自检 + 壳方言判定）
+    #   教训：新增模块时只想着「代码能跑」，忘了打包清单是**另一份真相**。
+    "net_balance.py",         # 余额 / 额度 / 本轮已用（2026-10-18 新增）
+    "system_facts.py",        # 系统事实采集（2026-10-18 新增）
     # ---- 功能包 fatfish_core/（10 个，2026-10-02 从主程序拆出）----
     "fatfish_core/__init__.py",
     "fatfish_core/envutil.py",    # 环境变量清洗 / 类型转换
@@ -115,8 +124,18 @@ EMBED = [
     #   "不能分屏 / 不能持久化"的阉割界面 —— 比崩掉更难发现。
     "fatfish_core/layout.py",     # 编辑器组布局数据模型（纯数据）
     "fatfish_core/exectail.py",   # exec 子程序输出 tailer
+    # ★ 2026-10-03 深夜补漏（审核由 audit_embed() 抓出）——
+    #   这三样都是当天新增，漏了会**静默降级**（不崩、但功能没了），最难发现：
+    #     · chat_window.py `import conlog`  → 真控制台「日志」页必须的两件套
+    #     · conlog.py 起宿主进程 loghost.py（CREATE_NEW_CONSOLE）
+    #     · consolehide.py 控制台隐藏/恢复，FATHFISHI.py 与 launch.py 都 try 导入
+    #   ⚠️ 审计对 `from fatfish_core import consolehide` 这种写法**查不出来**
+    #      （只登记顶层包名），所以这里必须人工维护。
+    "conlog.py",                  # 真控制台日志页：嵌窗口 + 管道
+    "loghost.py",                 # 真控制台日志页：宿主进程（conlog 的子进程）
+    "fatfish_core/consolehide.py",# 控制台窗口隐藏 / 恢复 / 查询
     # ---- 启动脚本 ----
-    "fatfish1.2.2.bat",       # 启动器（双击这个）
+    "fatfish1.2.3.bat",       # 启动器（双击这个）
     "fatfish_runtime.bat",    # 运行窗口
     "fatfish_lang.bat",       # 语言探测
     # ---- 小唐话词库（signatures/，2026-10-03）----
@@ -146,10 +165,12 @@ SELFCHECK_MODULES = [
     "fatfish_core",           # 功能包（2026-10-02 拆出；包名，查 __init__.py）
     "fatfish_core.layout",    # ★ 2026-10-03：编辑器组布局（缺失 → 界面静默降级）
     "fatfish_core.exectail",  # ★ 2026-10-03：exec 输出 tailer
+    "net_balance",            # ★ 2026-10-19：余额 / 额度 / 本轮已用
+    "system_facts",           # ★ 2026-10-19：系统事实
 ]
 
 MARKER = "##PYBEGIN##"
-VERSION = "1.2.2"
+VERSION = "1.2.3"
 EDITION = "I"                      # 兜底徽标：输出名无法识别时使用
 DEFAULT_OUT = "FATPACKII.bat"      # 默认产物（2026-09-20 起由 I 版改为 II 版）
 
@@ -296,8 +317,8 @@ if errorlevel 1 (
     exit /b 1
 )
 del "%EXTRACT_PY%" >nul 2>nul
-if not exist "FATHFISHI.py" (
-    echo   [X] FATHFISHI.py was not extracted - aborting.
+if not exist "FATHFISHII.py" (
+    echo   [X] FATHFISHII.py was not extracted - aborting.
     pause
     exit /b 1
 )
@@ -424,6 +445,23 @@ if exist ".env" (
         echo NET_MODE=ai
         echo # auto / search / extract / both
         echo TAVILY_MODE=auto
+        echo.
+        echo # ---- networking: multi-backend, added 2026-10-19 v1.2.3 ----
+        echo # empty = single backend, Tavily only
+        echo # auto = every backend that has a key
+        echo # or a comma list like deepseek,tavily
+        echo NET_BACKENDS=
+        echo # ai = reviewer AI picks / rule = preference plus rule / off = fixed
+        echo NET_BACKEND_ROUTER=rule
+        echo # rrf = rank fusion, default / score / none
+        echo NET_MERGE=rrf
+        echo.
+        echo # ---- quota ----
+        echo # 1 = report monthly usage after each search, 0 = hide
+        echo NET_QUOTA_SHOW=1
+        echo # day of month the Tavily quota resets, default 1
+        echo TAVILY_QUOTA_START_DAY=1
+        echo.
         echo VERIFIER_MAX_TOKENS=10000
     ) > ".env"
     echo       [OK] .env created - full skeleton, no keys inside
@@ -453,20 +491,20 @@ echo [7/7] Install finished!
 echo ------------------------------------------------------------
 echo    Next steps:
 echo      1. make sure .env holds your API keys
-echo      2. double-click "fatfish1.2.2.bat" to start FatFish
+echo      2. double-click "fatfish1.2.3.bat" to start FatFish
 echo ------------------------------------------------------------
 echo.
 
 if /i "%FATFISH_NO_GUI%"=="1" (
-    echo       [i] Launch prompt skipped - start fatfish1.2.2.bat manually.
+    echo       [i] Launch prompt skipped - start fatfish1.2.3.bat manually.
 ) else (
     set "ANS="
     set /p "ANS=     Launch FatFish now? type y to start, Enter to skip : "
     if /i "!ANS!"=="y" (
         echo       [OK] Launching in a separate window...
-        start "" cmd /k "%~dp0fatfish1.2.2.bat"
+        start "" cmd /k "%~dp0fatfish1.2.3.bat"
     ) else (
-        echo       [i] Not launched. Double-click fatfish1.2.2.bat anytime.
+        echo       [i] Not launched. Double-click fatfish1.2.3.bat anytime.
     )
 )
 

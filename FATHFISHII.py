@@ -136,6 +136,17 @@ def print_startup_status():
     print(paint(f"  🧠 主模型 [main model]：{MODEL} @ {BASE_URL}", BC))
     print(paint(f"  🌐 联网模式 [net mode]：{net_tools.NET_MODE.upper()}"
                 f" ｜ 检索模式 [tavily]：{net_tools.TAVILY_MODE.upper()}", BC))
+    # 搜索后端多选（2026-10-18）：只在启用时显示，未启用时不占一行
+    try:
+        _nb = (getattr(net_tools, "NET_BACKENDS", "") or "").strip()
+        if _nb:
+            _bk = net_tools.last_backends
+            print(paint(f"  🔎 搜索后端 [backends]：{_nb}"
+                        f" ｜ router={net_tools.NET_BACKEND_ROUTER}"
+                        f" ｜ merge={net_tools.NET_MERGE}"
+                        + (f" ｜ 上次实际使用：{'、'.join(_bk)}" if _bk else ""), BC))
+    except Exception:
+        pass
     print(paint(f"  🛠️  工作台目录 [workspace]：{workspace.get_workspace()}", BC))
     print(paint(f"  🧿 双人核验 [dual-AI verify]：{verify_tools.mode_label()}", BC))
     print(paint(f"  📡 审查意见镜像 [mirror]：{'ON' if VERIFY_MIRROR else 'OFF'}"
@@ -582,6 +593,36 @@ if _tavily_mode_env in ("search", "extract", "auto", "both"):
 _extract_env = _env_int("EXTRACT_MAX_LEN", 0)
 if _extract_env > 0:
     net_tools.EXTRACT_MAX_LEN = _extract_env
+
+# ============ 搜索后端多选（2026-10-18 新增）============
+#   NET_BACKENDS       ""=不启用（走原单后端）/ auto=所有配了 key 的 / "deepseek,tavily"=指定多选
+#   NET_BACKEND_ROUTER ai=审核 AI 决定 / rule=按偏好+规则 / off=固定不改
+#   NET_MERGE          rrf=按名次融合（默认）/ score / none
+#
+# ★ 必须放在「开工自检」之前执行：boot_report 要读这些值来渲染自检面板，
+#   读到的是这里的最终结果，而不是 net_tools 里的出厂默认。
+# ★ 留空即完全回滚到原来的单后端行为，不影响任何既有逻辑。
+_nb_env = _env_clean("NET_BACKENDS", "")
+if _nb_env:
+    net_tools.set_backends(_nb_env)
+_rb_env = _env_clean("NET_BACKEND_ROUTER", "").lower()
+if _rb_env in ("ai", "rule", "off"):
+    net_tools.NET_BACKEND_ROUTER = _rb_env
+_mg_env = _env_clean("NET_MERGE", "").lower()
+if _mg_env in ("rrf", "score", "none"):
+    net_tools.NET_MERGE = _mg_env
+
+# ============ 本轮已用：建立余额基线（2026-10-18 新增）============
+# 口径只有一句：本轮已用 = 启动那一刻的余额 - 现在的余额。
+# 为什么放这里：必须早于「开工自检」，这样自检面板里就能带上本轮数字。
+# 为什么不卡启动：start_session 先用磁盘缓存立一个临时基线，
+#                 真值交给后台线程去抓，抓到后自动固化（见 net_balance._sync_session）。
+try:
+    import net_balance as _netbal
+    _netbal.start_session()
+except Exception as _netbal_err:
+    print(paint(f"  ⚠️ 余额基线未建立（{_netbal_err}），本轮已用将不可用",
+                BY, DIM))
 
 # ============ 初始化「双人核验」审查员 ============
 #   审查员是独立的第二个模型实例：独立 system prompt（挑剔的复核人格），
@@ -1038,7 +1079,7 @@ def _exec_wait_label(name, args):
 #     于是主窗口 = 对话 + 报批，其余过程信息全部去旁边的窗口。
 #   通信：主程序 append status.log → 状态台增量 tail；
 #         状态台周期 touch console.online 作为心跳。
-#   降级：状态台没启动（例如直接跑 python FATHFISHI.py）→ 心跳不存在 →
+#   降级：状态台没启动（例如直接跑 python FATHFISHII.py）→ 心跳不存在 →
 #         _status_mirror() 自动把信息打回主窗口，**绝不静默吞掉**。
 STATUS_CONSOLE_ENABLED = _env_bool("STATUS_CONSOLE", True)
 STATUS_CONSOLE_TTL     = _env_float("STATUS_CONSOLE_TTL", 6.0)   # 心跳多久算过期（秒）
@@ -1962,7 +2003,7 @@ SYSTEM_PROMPT = (
 
     "【工作台与工具】工作台根目录默认为「启动根目录」（= 程序所在目录），所有路径都被限制在其中。\n"
     "  ★ 作业约定：日常产出请尽量放在 workspace/ 子目录里 —— 中间脚本、临时数据、实验产物都放那儿，\n"
-    "    以保持根目录整洁；只有「属于程序本身的代码 / 配置」（如 FATHFISHI.py、fatfish_core/、\n"
+    "    以保持根目录整洁；只有「属于程序本身的代码 / 配置」（如 FATHFISHII.py、fatfish_core/、\n"
     "    workspace.py 等）才直接改根目录。\n"
     "  查：ws_where 当前根目录｜ws_cd 切换根目录｜ws_cd_approve 确认切换｜"
     "ws_list 列目录｜ws_search 全文搜索｜ws_read 读文件\n"
@@ -2252,6 +2293,24 @@ settings.register("extract_max_len", net_tools.EXTRACT_MAX_LEN,
                   desc="extract 单段最大字符", group="联网", type=int, advanced=True,
                   env_name="EXTRACT_MAX_LEN",
                   apply=lambda v: setattr(net_tools, "EXTRACT_MAX_LEN", v))
+# ---- 搜索后端多选（2026-10-18）----
+#   /set net_backends auto               → 所有配了 key 的后端都进候选
+#   /set net_backends deepseek,tavily    → 指定多选
+#   /set net_backends ""                 → 关闭多后端（回滚到原单后端）
+settings.register("net_backends", net_tools.NET_BACKENDS,
+                  desc="搜索后端（多选，逗号分隔；auto=全部可用；留空=关闭多后端）",
+                  group="联网", env_name="NET_BACKENDS",
+                  apply=lambda v: net_tools.set_backends(v))
+settings.register("backend_router", net_tools.NET_BACKEND_ROUTER,
+                  desc="谁决定用哪个后端（ai=审核AI / rule=按偏好规则 / off=固定不改）",
+                  group="联网", choices=["ai", "rule", "off"],
+                  env_name="NET_BACKEND_ROUTER",
+                  apply=lambda v: setattr(net_tools, "NET_BACKEND_ROUTER", v))
+settings.register("net_merge", net_tools.NET_MERGE,
+                  desc="多后端结果融合方式（rrf=按名次最稳 / score / none）",
+                  group="联网", choices=["rrf", "score", "none"], advanced=True,
+                  env_name="NET_MERGE",
+                  apply=lambda v: setattr(net_tools, "NET_MERGE", v))
 
 # ---- 🔐 报批 ----
 # 回滚开关（2026-09-19 新增；默认写入「只读免报批」，可一条命令切回旧行为）
@@ -2703,6 +2762,16 @@ def _agent_main():
 
             # ---- /status 运行状态一览 ----
             if user_input in ("/status", "/st"):
+                try:
+                    import net_balance as _nb_st
+                    _sp = _nb_st.spent_line()
+                    if _sp:
+                        _si = _nb_st.session_info()
+                        print(paint(
+                            f"  💰 {_sp}（已运行 {_nb_st._fmt_elapsed(_si.get('elapsed'))}，"
+                            f"基线 {_si.get('base')} → 现 {_si.get('current')}）", BC))
+                except Exception:
+                    pass
                 print(paint("  📋 运行状态 [runtime status]", BC, BOLD))
                 print_startup_status()
                 print(paint("  （各项均可单独调整：/set 查看与修改参数）", BC, DIM))
@@ -2978,6 +3047,14 @@ def _agent_main():
                 API_KEY, BASE_URL, MODEL = new_key, new_base, new_model
                 TAVILY_API_KEY = new_tavily
                 net_tools.set_api_key(new_tavily)
+                # 搜索后端多选一并重载（留空 = 关闭多后端，回到原单后端）
+                net_tools.set_backends(_env_clean("NET_BACKENDS", ""))
+                _rb2 = _env_clean("NET_BACKEND_ROUTER", "").lower()
+                if _rb2 in ("ai", "rule", "off"):
+                    net_tools.NET_BACKEND_ROUTER = _rb2
+                _mg2 = _env_clean("NET_MERGE", "").lower()
+                if _mg2 in ("rrf", "score", "none"):
+                    net_tools.NET_MERGE = _mg2
                 client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
                 # 审查员配置一并重载（VERIFIER_* 留空时自动跟随主模型）
                 VERIFY_MIRROR = _env_bool("VERIFY_MIRROR", True)
@@ -3009,6 +3086,9 @@ def _agent_main():
                 VERIFY_FINAL_ANSWER = _env_bool("VERIFY_FINAL_ANSWER", False)
                 print(paint("  🔄 已重新加载 .env [.env reloaded]", BG, BOLD))
                 print(paint(f"     🧠 主模型 [main model]：{MODEL} @ {BASE_URL}", BC))
+                print(paint(f"     🌐 搜索后端 [backends]：{net_tools.NET_BACKENDS or '未启用（走原单后端）'}"
+                            f" ｜ router={net_tools.NET_BACKEND_ROUTER}"
+                            f" ｜ merge={net_tools.NET_MERGE}", BC))
                 print(paint(f"     🧿 审查员 [verifier]：{verify_tools.MODEL} @ {verify_tools.BASE_URL}", BC))
                 print(paint(f"     📡 审查意见镜像 [mirror]：{'ON' if VERIFY_MIRROR else 'OFF'}"
                             f"{' → ' + os.path.basename(VERIFY_MIRROR_PATH) if VERIFY_MIRROR else ''}", BC))

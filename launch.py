@@ -38,7 +38,7 @@ for _name in ("stdout", "stderr"):
 
 # ============ 路径 ============
 HERE = os.path.dirname(os.path.abspath(__file__))
-MAIN_SCRIPT = os.path.join(HERE, "FATHFISHI.py")
+MAIN_SCRIPT = os.path.join(HERE, "FATHFISHII.py")
 WATCHER_SCRIPT = os.path.join(HERE, "fatfish_watcher.py")
 STATUS_SCRIPT = os.path.join(HERE, "status_console.py")
 PY = sys.executable or "python"

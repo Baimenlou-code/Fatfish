@@ -920,6 +920,221 @@ E 面板离台时开流 / F 落款时间重放不变 / G 环境未动。
 
 ---
 
+
+---
+
+## 十九、联网从「大框」改回顶栏第三个按钮 · 2026-10-18 深夜
+
+**用户原话**
+
+> 「坏了，我意思是把联网窗口做到和布局和功能并列，结果给我写成大框了」
+
+同一晚早些时候，联网域被我做成了**第 5 个可停靠面板**（`chat_window` 的 `net` 面板）——
+它要占版面，本质就是一只大框。用户要的是顶栏上**并排的第三个两字按钮**。
+
+**改成什么**
+
+```
+顶栏：[ 布局 ] [ 功能 ] [ 联网 ]      ← 同一行、同号字、同款 flat 按钮（各约 43×20）
+                        ↓ 悬停 / 点一下（判定区只有按钮那一小块）
+                  ┌────────────────────────┐
+                  │ 联网    AI判            │
+                  │ 检索    auto            │
+                  │ 后端    auto            │
+                  │ 路由    AI              │
+                  │ 合并    RRF             │
+                  │ ──────────────────────  │
+                  │ 上次：（本轮尚未联网）    │
+                  │ 本月 官方 2次 0.010元    │
+                  │ 点一行 = 下一档 …        │
+                  └────────────────────────┘
+                    浮层是独立 Toplevel → 不占版面、不重排
+```
+
+**四个关键决定**
+
+| 决定 | 为什么 |
+|---|---|
+| 新增 `sidebar.InlineMenu`（顶栏内联按钮 + 单列浮层） | 与 `SidePanel`（功能）共用一套观感：同号字、同款按钮、行高**现量**、`overrideredirect` 浮层 → 不挤压现有面板 |
+| 删掉 `net` 面板（`layout.PANELS_OPTIONAL = ()`） | 「独立出来」≠「做成面板」。`.env` 里旧布局若含 `net`，`from_dict` 会静默丢弃它、其余布局原样保留（已用真实 JSON 验证，不会触发降级） |
+| 读值改成三段：`settings` → `os.environ` → `net_tools` 属性 | 独立跑（demo / 探针 / 只开 GUI）时 settings 里没有这 5 个键，只看 net_tools 会读到**模块默认值** → 出现「菜单显示 关、实际跑的是 auto」 |
+| 没有 settings 登记时，改值顺手同步 `os.environ` | 否则读回来还是旧值（改完像没生效）；**只改进程环境，绝不写 .env** |
+
+**文件**
+
+| 文件 | 改动 |
+|---|---|
+| `workspace/fatgui/sidebar.py` | 新增 `InlineMenu` 类（约 460 行，含尺寸现量 / 悬停轮询 / 幂等 destroy） |
+| `chat_window.py` | 删 net 面板全部 UI；`_net_*` 只留「读值 / 循环 / 流水」，并新增 `_net_menu_rows/_footer/_refresh/open`；`_start_fatgui` 里建 `InlineMenu` |
+| `fatfish_core/layout.py` | `PANELS_OPTIONAL = ()`、`PANEL_LABELS` 去掉 `net`、自测同步 |
+| `workspace/fatgui/ctl.py` | `MIGRATED` 指路文案「🌐 联网面板 → 顶栏「联网」按钮」；注释与自测标题同步 |
+| `workspace/fatgui/README.md` | 文档改成三按钮形态；四联 23 项 + 顶栏「联网」5 项；新增 v5 段（含教训） |
+| `workspace/fatgui/probe_topbar_e2e.py` | 五联 → 四联（换联回归改用「遥控 3 项 → 安全 9 项」），并补一段「联网按钮」体检 |
+| `workspace/fatgui/probe_net_menu.py` | **新增**端到端探针：并列顺序 / 不占版面 / 5 行不裁字 / 点一行切档并还原 / destroy 幂等 |
+| `workspace/fatgui/patch_net_topbar.py` | **新增**一次性补丁脚本（备份 + 唯一锚点校验 + 预演编译 + 整批回滚 + `--revert`） |
+
+**验证（全绿）**
+
+| 套件 | 结果 |
+|---|---|
+| `python -m fatfish_core.layout` | 全部通过（含「net 不再是合法面板名」） |
+| `fatgui/ctl.py` | 全部通过（四联 23 项，指路文案已改） |
+| `fatgui/sidebar.py --selftest` | 全部通过（InlineMenu 与 SidePanel 互不影响） |
+| `chat_window.py --selftest` | **全部通过**（`[24]` 段 22 条新断言：并列顺序用 pack 顺序判定 —— 自测窗口常 withdraw，像素坐标全 0，上一版会"假绿"） |
+| `fatgui/probe_topbar_e2e.py` | 端到端通过（功能抽屉四联 + 联网按钮） |
+| `fatgui/probe_net_menu.py` | 端到端通过（展开前后 `body` 尺寸 `1360x611` **一像素不变**；浮层 `197x236` = 内容高） |
+| 可复现性 | 快照 → `--revert` → `--apply` → 逐字节一致（CRLF 保持） |
+
+> ⚠️ 生效方式：**重启肥鱼**。回滚一条命令：
+> `venv\Scripts\python.exe workspace\fatgui\patch_net_topbar.py --revert`
+
+---
+
+## 二十、v1.2.3 · 余额刷新节奏 + 命名归位 II（2026-10-19 凌晨）
+
+### 20.1 起手：一个「永远不动的 0.00 元」
+
+**用户原话**
+
+> 「那个本轮已用多少元怎么不变动」
+
+状态条上「本轮已用 0.00元」从启动起就没跳过。查证结论是**显示没坏，是没人去取新余额**：
+
+| 证据 | 事实 |
+|---|---|
+| `workspace/net_balance_session.json` | `base_ts == last_ts == 00:09:14`（建基线后再没更新过） |
+| `workspace/net_balance_cache.json` | `ts` 距当时已 10 分钟，一次没刷 |
+| `workspace/net_balance_state.json` | `23:34→109.94`、`00:07→107.59`、`00:09→107.40` —— 余额**一直在掉** |
+
+`refresh_async()` 全工作台只有两个调用点：`start_session()`（启动一次）与
+`do_network()` 结束（联网搜索后一次）。而 4 秒定时器 `_spent_tick` 的 docstring
+写得很清楚——「**纯内存读取，不碰网络**」。
+
+> 于是：纯聊天场景下，`last_total` 永远等于 `base_total`，`spent = 0.00`。
+> 数字没错，只是它测的是一段从未被更新的数据。
+
+### 20.2 改法：60 秒 + 每轮输出完一次
+
+| # | 位置 | 改动 |
+|---|---|---|
+| 1 | `net_balance.py` `DEFAULTS` | `NETBAL_CACHE_TTL` 90 → **60** 秒（一分钟一刷） |
+| 2 | `chat_window.py::_spent_tick` | 每 4 秒顺手调 `refresh_async()`；真要不要发请求由 60 秒节流决定 |
+| 3 | `chat_window.py::_spent_round_end` | **新增**：每轮输出结束 `refresh_async(min_interval=0)` 插队刷一次 + 1.5 秒后补刷 |
+
+两个设计细节，踩过才知道：
+
+* **内层必须单独 try**。外层的 `except` 会把整个定时器停掉（`_spent_tick_id = None`），
+  一次刷新失败就能把标签弄死。刷新套独立 try，失败当没发生。
+* **为什么要 1.5 秒补刷**。`refresh_async` 是 daemon 线程，调用当即返回，
+  此刻 `last_total` 还是旧值。抓取落盘后再刷一次，才看得见数字跳上去。
+
+`_spent_round_end` 挂在 `stream_end()` 里、`self._stream = None` **之后**——
+因为该方法后面有多处提前 return（面板不在前台 / 控件已销毁），
+但「这一轮说完了」这个事实在哪儿都成立。
+
+### 20.3 顺手抓出的发布阻断级问题
+
+`make_fatpack.py` 自带的 `audit_embed()` 报出 7 条依赖缺失，归并后是**两个文件漏在 EMBED 清单外**：
+
+| 文件 | 谁在用 | 漏了的后果 |
+|---|---|---|
+| `net_balance.py` | `FATHFISHII.py` / `chat_window.py` / `net_tools.py` / `boot_report.py` | **裸 import 失败 → 主程序直接起不来** |
+| `system_facts.py` | `boot_report.py` / `exec_tools.py` / `verify_tools.py` | 同上 |
+
+这俩都是 2026-10-18 新增的，当时只顾「代码能跑」，忘了打包清单是**另一份真相**。
+EMBED 41 → **43 项**，`SELFCHECK_MODULES` 同步补 2 项。
+
+### 20.4 命名归位：H 版 I → H 版 II
+
+用户要求「版本更新到 1.2.3 和 Fathfishii」。
+
+| 项 | 旧 | 新 |
+|---|---|---|
+| 主程序 | `FATHFISHI.py` | **`FATHFISHII.py`** |
+| 启动器 | `fatfish1.2.2.bat` | **`fatfish1.2.3.bat`** |
+| 版本号 | `v1.2.2` | **`v1.2.3`** |
+| 横幅 | `H 版 I v1.2.2` | **`H 版 II v1.2.3`** |
+
+命名规则不变：`FAT` + 大版本字母 `H` + `FISH` + 小版本罗马数字。
+小版从 `I` 走到 `II`，与安装器 `FATPACK**II**` 对齐。
+
+**改动范围**（34 处 / 13 个文件）：
+
+* **必须改（22 处）**：`launch.py` 的 `MAIN_SCRIPT`、`make_fatpack.py` 的 EMBED 清单
+  与安装器解包自检、启动器与运行窗口的标题与提示、`ui_core.py` 横幅、README
+* **注释同步（12 处）**：`boot_report` / `fatfish_watcher` / `status_console` /
+  `workspace` / `net_tools` / `ui_core` / `stream_core` / 主程序自身 docstring
+* **不改**：`技术手册.md` 的 v1.2.2 历史段落、`_backup/` 里的旧件
+  —— 那是「当时发生了什么」的记载，改了就是篡改历史
+
+文件重命名**单独一步**做，前后比对 MD5：`8ac8dcacd810d565` → `8ac8dcacd810d565`（逐字节一致）。
+
+### 20.5 验证
+
+| 套件 | 结果 |
+|---|---|
+| `chat_window.py --selftest` | **150 项全绿 / 0 失败**（`[25]` 段 6 项全过） |
+| `make_fatpack.py --manifest` 审计 | **通过**（43 项，无缺失依赖） |
+| 节流值 | `NETBAL_CACHE_TTL = 60` 生效 |
+| 实测刷新 | `refresh_async(min_interval=0)` 立即返回 True，**2 秒内**缓存 `total` 从 107.4 → 106.13 |
+| 防抖 | 紧接着再调 → `False`（被 5 秒下限挡住，不会打风暴） |
+| 启动链 | `MAIN_SCRIPT` 指向 `FATHFISHII.py`（存在）；WATCHER / STATUS 均存在 |
+| 旧名残留 | 根目录与 `FATPACKII.bat` 内 **零残留** |
+| 产物 | `FATPACKII.bat` 1,541,637 B / 43 个内嵌文件 |
+
+### 20.6 备份与回滚
+
+| 批次 | 备份 |
+|---|---|
+| 余额刷新 | `_backup/net_balance.py.20261019_002308.v123balance.bak`<br>`_backup/chat_window.py.20261019_002308.v123balance.bak` |
+| 版本号 + 改名 | `_backup/*.20261019_002352.v123rename.bak`（13 个文件） |
+| EMBED 补漏 | `_backup/make_fatpack.py.20261019_002444.v123embedfix.bak` |
+| 旧安装器 | `_backup/FATPACKII.bat.v122_before_v123.bak` |
+| 大改前整版 | `oldver/fathfish_20261019_001406_昨夜大改前_v1.2.2基线/`（51 个文件，自带回滚脚本） |
+
+> ⚠️ **生效方式：重启肥鱼**。`chat_window.py` / `FATHFISHII.py` 都是启动时一次载入，
+> 热改无效。重启后：
+> * 启动横幅变成 `H 版 II v1.2.3`
+> * 状态条「本轮已用」在**第一次输出完**就会跳数，之后每 60 秒跟一次
+
+### 20.7 安装器 `.env` 骨架补键
+
+安装器第 5 步生成的 `.env` 骨架停在 10-03 版，只有 18 个键，比实际在用的少 9 个。
+补上其中 **5 个**有意义的（`UI_LAYOUT` / `UI_GEOM_MAIN` 不补 —— 那是运行时自动写的，
+写进骨架反而误导；`DEEPSEEK_*` 已有注释示例）：
+
+| 键 | 出厂值 | 作用 |
+|---|---|---|
+| `NET_BACKENDS` | 空 | 空=单后端（Tavily）/ `auto`=所有配了 key 的 / `deepseek,tavily`=指定 |
+| `NET_BACKEND_ROUTER` | `rule` | `ai`=审核 AI 决定 / `rule`=按偏好+规则 / `off`=固定不改 |
+| `NET_MERGE` | `rrf` | `rrf`=按名次融合 / `score` / `none` |
+| `NET_QUOTA_SHOW` | `1` | 联网后报一句本月用量：`1`=开 / `0`=关 |
+| `TAVILY_QUOTA_START_DAY` | `1` | Tavily 计费月的起始日 |
+
+#### ⚠️ 这里差点埋一个雷
+
+第一版补丁我写了 `echo # ---- networking: multi-backend (2026-10-19, v1.2.3) ----`
+—— **一个未转义的 `(`，而整段骨架包在 `( ... ) > ".env"` 里**。
+cmd 会把那个括号当成子壳的开启，**提前关闭整段**，结果是特喵的连原本 18 个键都生成不出来。
+
+> 骨架文件自己的第 4 行就写着：`#  ASCII only. Avoid parentheses and percent signs on every line.`
+> 规则明明写在被改的文件里，我还是踩了 —— 因为「我改的是注释，不算值」。
+
+修法：去掉括号，并在补丁脚本里加**硬检查** —— 新增的每一行如果以 `echo` 开头，
+其正文里出现 `(`、`)`、`%`、`^`、`&`、`|`、`<`、`>` 任一字符就**直接中止，不写盘**。
+
+**验证**：把安装器第 5 步整段（4146 字符）抽出来，放进隔离目录单独跑一遍 `cmd /c`，
+实测生成 **23 个键**，5 个新键的值与出厂默认一致。
+
+### 20.8 已知边界（不是 bug）
+
+* 官方 `/user/balance` 只给 **2 位小数** → 单次花几分钱以下，要累积到 0.01 才显现
+* 60 秒节流 + 每轮结束插队 → 最坏滞后约 1 分钟
+* 「本轮已用」是**账户级**的，包含主模型 / 审查员 / 搜索 / 路由 AI 的全部消耗，
+  不是只算联网搜索
+
+---
+
 > 📌 本文件由 `README.md` 更新记录章节剥离并重编而成。
 > 📌 新增记录请**直接追加在本文件末尾（第十三节之后）**，或按日期新建小节；README 不再承载更新记录。
-> 📌 最近一次增订：**2026-10-03**（第十五 ~ 十八节；18.8–18.11 于当日深夜追记）。
+> 📌 最近一次增订：**2026-10-19 凌晨**（第二十节：v1.2.3 余额刷新节奏 + 命名归位 II）。

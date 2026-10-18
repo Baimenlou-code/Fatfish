@@ -46,8 +46,23 @@ import json
 import sys
 
 # ================================================================ 常量
-#: 四个面板名（顺序即「面板 ▾」菜单里的顺序）
+#: 预设里的面板（顺序即「面板 ▾」菜单里的顺序）
 PANELS = ("chat", "log", "status", "exec")
+
+#: 可停靠 / 可摘出，但**默认不出现在任何预设**里的面板。
+#:
+#: ★ 2026-10-18 23:11 用户纠正：「我意思是把联网窗口做到和布局和功能并列，
+#:   结果给我写成大框了」→ 联网域**不做面板**，它回到顶栏当第三个按钮
+#:   （chat_window 的 InlineMenu）。于是「第五个面板」这条试验被整体撤掉，
+#:   这里留**空元组**而不是删掉常量：给「以后真需要一个默认隐藏的面板」留接口。
+#:
+#:   PANELS          = 预设用到的面板（决定 PRESETS 的形状）
+#:   PANELS_OPTIONAL = 合法但不进预设的面板（目前为空）
+#:   ALL_PANELS      = 所有合法面板名（new_group / dock / from_dict 校验用）
+PANELS_OPTIONAL = ()
+
+#: 所有合法面板名（校验用：new_group / dock / from_dict 都认这个）
+ALL_PANELS = PANELS + PANELS_OPTIONAL
 
 #: 面板的中文名（视图层也用得到，放这里统一口径）
 PANEL_LABELS = {
@@ -144,7 +159,7 @@ class LayoutModel(object):
         """新建一个组，返回其 gid。"""
         self._seq += 1
         gid = "g%d" % self._seq
-        panels = [p for p in (panels or []) if p in PANELS]
+        panels = [p for p in (panels or []) if p in ALL_PANELS]
         self.groups[gid] = {
             "panels": panels,
             "active": active if active in panels else (panels[0] if panels else None),
@@ -340,7 +355,7 @@ class LayoutModel(object):
 
     def dock(self, panel, into=None):
         """把面板停靠回主窗口（默认放进第一个组）。"""
-        if panel not in PANELS:
+        if panel not in ALL_PANELS:
             return False
         gid = into or (self.leaf_groups()[0] if self.leaf_groups() else None)
         if gid is None or gid not in self.groups:
@@ -435,7 +450,7 @@ class LayoutModel(object):
                 if not isinstance(g, dict):
                     continue
                 gid = str(gid)
-                panels = [p for p in (g.get("panels") or []) if p in PANELS]
+                panels = [p for p in (g.get("panels") or []) if p in ALL_PANELS]
                 active = g.get("active")
                 if active not in panels:
                     active = panels[0] if panels else None
@@ -533,6 +548,13 @@ def _selftest():
     check("关闭后无空组残留", not m.check_invariants(), str(m.check_invariants()))
     m.dock("exec")
     check("重新显示 exec", m.group_of("exec") is not None)
+
+    print("── 可选面板（2026-10-18：联网改回顶栏按钮，没有第五个面板了）──")
+    check("PANELS_OPTIONAL 已清空（不留半截可停靠面板）", PANELS_OPTIONAL == ())
+    check("net 不再是合法面板名",
+          "net" not in ALL_PANELS and "net" not in PANEL_LABELS)
+    check("dock('net') 会被拒", m.dock("net") is False)
+    check("合法面板名之外仍会被拒", m.dock("__nope__") is False)
 
     print("── 极端操作不崩 ──")
     m = LayoutModel().reset("tabs")
