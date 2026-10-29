@@ -1171,4 +1171,171 @@ cmd 会把那个括号当成子壳的开启，**提前关闭整段**，结果是
 
 > 📌 本文件由 `README.md` 更新记录章节剥离并重编而成。
 > 📌 新增记录请**直接追加在本文件末尾（第十三节之后）**，或按日期新建小节；README 不再承载更新记录。
-> 📌 最近一次增订：**2026-10-19 凌晨**（第二十节：v1.2.3 发布 `GforGuoyu`）。
+## 二十一、同步开发版：QQ-LIGHT 精简历史 · 网络面板 API 编辑 · 插件栏（2026-10-23 开发 / 2026-10-29 同步）
+
+> 一句话：**把「群里一句『我打开了』要重发整段 37 万 token 技术对话」这件事从根上掐掉**，
+> 顺手让 API key 能在界面里直接改、插件栏从一排图标变成能点能启停的浮层。
+> 依据：源码实测（`FATHFISHII.py` 第 214~269 行 / 第 3361~3382 行；`chat_window.py` 第 2074~2400 行）、
+> 同步记录 `.fatfish_tmp/commit_sync_20261029.txt`、提交 `f006eab`。
+
+**为什么 10-23 的改动拖到 10-29 才进仓库**：发布仓库 `main` 自 v1.2.3（10-19）后一直停着，
+而这三块开发直接做在主开发目录 `E:\FATFISH` 上。本节记录的是**开发日期 10-23、同步日期 10-29** 这一批。
+
+### 21.1 起手：92% 的直通轮次只回一行 `<skip>`
+
+QQ 消息与本地对话**共用同一份 `messages`**。于是群里随口一句「我打开了」，
+也要把当时那段技术对话（实测 **37 万 token**）整包重发一遍 ——
+而 QQ 直通模式下，**92% 的轮次最后只回一个 `<skip>`**（模型判定「不该说话」）。
+
+| 项 | 事实 |
+|---|---|
+| 触发条件 | QQ 通道的任意一条消息（直通 / 旁听插话 / 群聊 / 私聊） |
+| 代价 | 每轮整包重发全量历史，绝大多数结论是「不说话」 |
+| 本质 | 不是模型笨，是**给它看了它这次根本不需要看的东西** |
+
+### 21.2 做法：只换「本次发出内容」，历史照常维护
+
+这是本节最关键的一个设计决定 —— **不是删历史，是换发送视图**。
+
+```python
+# FATHFISHII.py 3362
+_qq_light = QQ_LIGHT_HISTORY and _is_qq_turn(user_input)
+messages.append({"role": "user", "content": content})
+messages = trim_history(messages, MAX_HISTORY)     # ← 本地历史照旧全量维护
+
+# 3372~3382  只在「QQ 轮次的首轮」替换发送内容
+_send_msgs = messages
+if _qq_light and _round == 0 and len(messages) >= 2:
+    _send_msgs = _qq_light_ctx(messages)
+    print(paint("  📨 QQ 精简轮次：system + %d 条历史 + 当前消息（约 %.1fk tok）[qq-light]"
+                % (_n_hist, estimate_tokens(_send_msgs) / 1000.0), BC, DIM))
+
+resp = _fc_call(client, MODEL, _send_msgs, ...)     # ← 3387 发的是精简版
+```
+
+**正确性为什么不受影响**：`_round == 0` 才精简。模型若要调工具，第 2 轮起
+`_send_msgs` 自动回落到全量 `messages` —— 工具链看到的永远是真历史。
+
+#### 三个开关（都有默认值，老配置无需改动）
+
+| 键 | 默认 | 作用 |
+|---|---|---|
+| `QQ_LIGHT_HISTORY` | `1` | 是否启用精简（`.env` 写 `QQ_LIGHT_HISTORY=0` 即整体关掉） |
+| `QQ_LIGHT_ROUNDS` | `8` | 携带历史**条数**上限（`0` = 只带当前这一条） |
+| `QQ_LIGHT_TOKENS` | `6000` | 携带历史**token** 上限（与条数双重约束，先到先停） |
+
+#### 两个新函数
+
+| 函数 | 位置 | 职责 |
+|---|---|---|
+| `_is_qq_turn(s)` | 220 | 本次输入是否来自 QQ 通道。`fatfish_core.qqmode` 渲染的文本**统一以「【QQ」开头**，本地键盘输入不会以此开头 → 前缀判定足够可靠，不必改桥接协议 |
+| `_qq_light_ctx(msgs)` | 232 | 构造「system + 少量纯对话历史 + 当前消息」，见下表四条规矩 |
+
+`_qq_light_ctx()` 的四条规矩，每条都对应一个曾经会炸的场景：
+
+| # | 规矩 | 为什么 |
+|---|---|---|
+| 1 | 只留 `role=user` 与**无 `tool_calls`** 的 `assistant` | 带 `tool_calls` 的 assistant 后面必须跟 `tool` 消息，截断后会造成 **`tool must follow tool_calls` 报错**；同时也避免把几十次脚本输出重新塞进 QQ 聊天 |
+| 2 | 从最新往回累加，超 `ROUNDS` 或 `TOKENS` 即停 | 优先保「最近说了什么」，而不是从头截 |
+| 3 | 首条必须是 `user`，否则丢掉 | 某些服务端对「system 之后紧跟 assistant」的序列会拒绝 |
+| 4 | 结果长度 ≤ 1 时兜底成 `system + msgs[-1]` | 极端情况（历史全是工具消息）也不能发出空请求 |
+
+> 💡 附带效果：QQ 轮次的输入 token 从「一段随对话变长的巨物」变成**稳定在几千**，
+> 群里聊天不再越聊越贵。
+
+### 21.3 网络面板：改 key 不必再手改 `.env`
+
+以前换一把 key 要「关程序 → 记事本改 `.env` → 重开」。现在顶栏「联网」浮层里三行 key 都可点：
+
+| 行 | 键名优先级（`_APIKEY_SPEC`） | 留空的含义 |
+|---|---|---|
+| 主模型 | `DEEPSEEK_API_KEY` / `FATFISH_API_KEY` … | ⚠️ 清除主 key（`/reload` 会拒绝空 key 并保留旧值） |
+| 审查员 | `VERIFIER_API_KEY` 等 | 跟随主模型 key |
+| Tavily | `TAVILY_API_KEY` | 关闭 Tavily 检索 |
+
+| 函数 | 位置 | 职责 |
+|---|---|---|
+| `_mask_key` | 2074 | 展示永不外泄整串：空 → `（未配置）`；≤12 位 → `已配置 ••••`；否则 `前6…后4` |
+| `_env_key_of` | 2083 | 按优先级读当前值（只看进程环境，启动时 `load_dotenv` 已灌入） |
+| `_net_api_rows` | 2094 | 给浮层拼三行 `(key, 标签, 掩码)`，单行异常不影响整行列表 |
+| `_net_edit_key` | 2182 | 点一行 → 收起浮层（它是 topmost，会盖住输入框）→ 弹输入框 |
+| `_net_write_env_key` | 2148 | 只替换 `.env` 里**那一行**，其余字节原样保留 |
+
+`_net_write_env_key()` 两个细节值得记：
+
+* **写「本来就在用的那个键名」**：`names` 是候选键列表，若平白新增一行，
+  旧值就成孤儿（读的还是老键），所以先 `env_has_key()` 找出实际在用的那个再写。
+* **首次改动前自动备份 `.env`**：复制到 `_backup/.env.key_<时间戳>.bak` ——
+  **只 `copy2` 不读内容、不打印**，含密钥的文件不进日志。一次会话只备一次（`_env_key_backed`）。
+
+#### 改完怎么生效：不直接换 client，投一条 `/reload`
+
+```python
+# 2108  _net_request_reload()
+OUT_Q.put({"kind": "msg", "text": "/reload"})
+```
+
+`/reload` 要同时重建 **OpenAI client / `verify_tools` / `net_tools` 三处配置**。
+交给主循环**串行**做，才不会出现「模型换了、审查员还是旧 key」这种半截状态 ——
+GUI 线程与 agent 线程并发改全局变量，踩的就是这个坑。
+同时 `_net_reload()`（2122）先 `load_dotenv(override=True)` 刷一遍本进程环境，
+界面上立刻能看到新值。
+
+### 21.4 插件栏：从一排图标变成能启停的浮层
+
+| 函数 | 位置 | 职责 |
+|---|---|---|
+| `_plugin_menu_rows` | 2312 | 行数据来自 `plugins.list_rows()`，取不到就返回空表（绝不抛） |
+| `_plugin_menu_footer` | 2322 | 逐个 `probe(key)` → `● 运行中` / `○ 停止` + 详情 |
+| `_plugin_menu_open` | 2344 | **浮层一弹出就重探** —— 进程可能已被外部启停 |
+| `_plugin_menu_actions` | 2348 | 标题行右侧 `⟳` 手动刷新 |
+| `_plugin_pick` | 2361 | 点一行：已运行则停，否则启；`toggle()` 异步执行 |
+
+`_plugin_menu_footer()` 里有一条**救命的提示**，专门治「以为坏了」：
+
+```python
+if not _qm._QQ.get("on"):
+    out.append("⚠️ 本体 QQ 模式未开：窗口里敲 /qq on")
+```
+
+桥接进程起来了、但**本体 QQ 模式没开** → 消息照样收不到。以前这个组合看起来
+和「完全没启动」一模一样，现在浮层直接告诉你去敲 `/qq on`。
+
+`_plugin_pick()` 的回调跑在**后台线程**，所以一律 `self.root.after(0, _ui)` 转主线程 ——
+这正是 §十五 P0 那场闪退的同源问题（跨线程碰 Tk）。这次没踩，是因为把老坑写进了注释。
+
+### 21.5 同步范围与有意保留项
+
+| 文件 | 行数 | 主要改动 |
+|---|---|---|
+| `FATHFISHII.py` | **+78** | `_is_qq_turn` / `_qq_light_ctx` / 三个开关 / 首轮切换点 |
+| `chat_window.py` | **+383** | 网络面板 API 编辑（`_net_*` 八个函数）+ 插件栏浮层（`_plugin_menu_*` 六个函数） |
+| `fatfish_core/qqmode.py` | **+69 / −18** | 配合 QQ-LIGHT 的通道渲染调整，含 10-23 / 10-24 两处修补 |
+| `file_tools.py` | **+11** | 小修 |
+
+| 未同步项 | 原因 |
+|---|---|
+| `.env` | 仓库维护的是**发布骨架**，不含密钥；缺失的 11 个键（`DEEPSEEK_API_KEY` / `NET_BACKENDS` / `MAX_HISTORY` 等）由使用者自行填写 |
+| `.gitignore` | 维持仓库版本（含 `FATPACK*.bat` 不入库的约定，见 §十七） |
+| `FATPACKII.bat` | 构建产物，已按 §十七 约定移出代码区，只随 Release 分发 |
+
+### 21.6 提交与回滚
+
+| 项 | 值 |
+|---|---|
+| 提交 | **`f006eab`** `feat(sync): 同步开发版最新改动 —— QQ-LIGHT 精简历史 · 网络面板 API 编辑 · 插件栏` |
+| 推送 | `1b05b48..f006eab  main -> main`（2026-10-29 19:36，SSH 经 `ssh.github.com:443`） |
+| 同步前快照 | `_backup/fatfish_sync_20261029_183017/`（4 个旧版文件） |
+| 回滚（保留历史） | `git revert f006eab && git push origin main` |
+| 回滚（抹掉该提交） | `git push -f origin 1b05b48:main`（会改写已发布历史，慎用） |
+| 只想关掉 QQ-LIGHT | `.env` 写 `QQ_LIGHT_HISTORY=0`，重启生效 |
+
+> ⚠️ **生效方式：重启肥鱼**。`FATHFISHII.py` / `chat_window.py` 都是启动时一次载入，热改无效。
+
+---
+
+---
+
+> 📌 本文件由 `README.md` 更新记录章节剥离并重编而成。
+> 📌 新增记录请**直接追加在本文件末尾（第十三节之后）**，或按日期新建小节；README 不再承载更新记录。
+> 📌 最近一次增订：**2026-10-29 晚**（第二十一节：同步 QQ-LIGHT / 网络面板 API 编辑 / 插件栏，提交 `f006eab`）。
