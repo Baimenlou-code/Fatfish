@@ -293,7 +293,16 @@ def extract_file_refs(text):
     else:
         text_for_at = text
     for m in AT_PATH_RE.finditer(text_for_at):
-        paths.append(m.group(1))
+        cand = m.group(1)
+        # ★ 2026-10-23 修：`@` 后面**不一定**是路径。
+        #   ① 提示词模板里的字面量 `@路径（类型，大小）` → 以前被当成路径，
+        #      于是每轮 QQ 消息都白塞一条「【文件：路径（类型，大小）】读取失败：文件不存在」；
+        #   ② 群聊里的 `@3567037873`、`@我` 同理，全是噪音。
+        #   规则：先在全/半角左括号处截断（附件的类型说明），
+        #         再要求「确实存在的文件 / 带分隔符的目录」才放行。
+        cand = re.split(r"[（(]", cand, 1)[0].strip()
+        if cand and _looks_like_path(cand):
+            paths.append(cand)
 
     if not paths and _looks_like_path(stripped):
         paths.append(stripped)

@@ -205,6 +205,69 @@ LOG_ROOT       = "logs"
 CODE_ROOT      = "generated_code"
 API_TIMEOUT    = _env_int("API_TIMEOUT", 900)          # 单次 API 请求超时秒数（原 60 → 300 → 900，大上下文更慢；.env 可覆盖）
 
+# ---- ★ [QQ-LIGHT v1] QQ 通道轮次不带历史 ----
+# 背景：QQ 消息与本地对话共用同一份 messages（主循环同一入口 _win_input 取词），
+#   群里一句「我打开了」也要把整段技术对话（实测 37 万 token）整包重发，
+#   而 92% 的直通轮次最后只回 <skip> —— 纯属白烧钱。
+# 做法：QQ 轮次的**第一轮**只发 system + 当前这条消息；若模型要调工具
+#   （说明真要干活），后续轮次自动切回全量历史，正确性不受影响。
+# 关掉：.env 写 QQ_LIGHT_HISTORY=0
+QQ_LIGHT_HISTORY = _env_bool("QQ_LIGHT_HISTORY", True)   # QQ 轮次是否启用精简历史
+QQ_LIGHT_ROUNDS  = _env_int("QQ_LIGHT_ROUNDS", 8)        # QQ 轮次携带的历史条数上限（0=不带）
+QQ_LIGHT_TOKENS  = _env_int("QQ_LIGHT_TOKENS", 6000)     # QQ 轮次历史的 token 上限
+
+
+def _is_qq_turn(s):
+    """判断本次输入是否来自 QQ 通道（直通 / 旁听插话 / 群聊 / 私聊）。
+
+    这些文本由 fatfish_core.qqmode 渲染，统一以「【QQ」开头；
+    本地键盘输入不会以此开头，故前缀判定足够可靠。
+    """
+    try:
+        return isinstance(s, str) and s.startswith("\u3010QQ")
+    except (AttributeError, TypeError):
+        return False
+
+
+def _qq_light_ctx(msgs):
+    """为 QQ 轮次构造「精简上下文」：system + 少量历史 + 当前消息。
+
+    设计要点：
+      · 只保留「纯对话」消息（user / 无 tool_calls 的 assistant），
+        过滤掉 tool 结果与带工具调用的 assistant —— 既避免
+        "tool must follow tool_calls" 报错，也不会把几十次脚本输出
+        重新塞进 QQ 聊天里。
+      · 条数受 QQ_LIGHT_ROUNDS、长度受 QQ_LIGHT_TOKENS 双重约束；
+        QQ_LIGHT_ROUNDS=0 时等价于「只带当前这条」。
+      · 开头必须是 user（否则丢弃），保证消息序列合法。
+    """
+    if not msgs:
+        return msgs
+    sysm = msgs[0] if msgs[0].get("role") == "system" else None
+    rest = msgs[1:] if sysm else list(msgs)
+
+    clean = [m for m in rest
+             if m.get("role") == "user"
+             or (m.get("role") == "assistant" and not m.get("tool_calls"))]
+
+    picked, acc = [], 0
+    for m in reversed(clean):
+        t = estimate_tokens([m])
+        if picked and (len(picked) >= max(1, QQ_LIGHT_ROUNDS)
+                       or acc + t > QQ_LIGHT_TOKENS):
+            break
+        picked.insert(0, m)
+        acc += t
+
+    # 首条必须是 user，否则 API 可能拒绝；多余的前缀直接丢
+    while picked and picked[0].get("role") != "user":
+        picked.pop(0)
+
+    out = ([sysm] if sysm else []) + picked
+    if len(out) <= 1:                      # 极端情况兜底：至少别是空
+        out = ([sysm] if sysm else []) + [msgs[-1]]
+    return out
+
 # ---- 双人核验（第二位 AI 审查员）----
 #   0) VERIFIER_*   ：审查员的 key / 地址 / 模型（留空则沿用主模型配置）
 #   1) VERIFY_MODE  ：off / auto（仅核验有副作用动作）/ all（连只读也核验）
@@ -3295,6 +3358,8 @@ def _agent_main():
                     user_input, query=search_query, mode=search_mode, urls=search_urls))
 
             content = file_tools.build_content("\n\n".join(parts), image_blocks)
+            # ★ [QQ-LIGHT v1] 本轮是否走「不带历史」的轻量发送
+            _qq_light = QQ_LIGHT_HISTORY and _is_qq_turn(user_input)
             messages.append({"role": "user", "content": content})
             messages = trim_history(messages, MAX_HISTORY)
 
@@ -3304,11 +3369,22 @@ def _agent_main():
             for _round in range(MAX_TOOL_ROUNDS):
                 # 发送前兜底清洗，杜绝 "tool must follow tool_calls" 报错
                 messages = _sanitize_messages(messages)
+                # ★ [QQ-LIGHT v2] QQ 轮次首轮：发 system + 少量纯对话历史。
+                #   历史本身照常维护，仅「本次发出内容」换成精简版。
+                _send_msgs = messages
+                if _qq_light and _round == 0 and len(messages) >= 2:
+                    _send_msgs = _qq_light_ctx(messages)
+                    _n_hist = max(0, len(_send_msgs) - 2)
+                    print(paint(
+                        "  📨 QQ 精简轮次：system + %d 条历史 + 当前消息"
+                        "（约 %.1fk tok）[qq-light]"
+                        % (_n_hist, estimate_tokens(_send_msgs) / 1000.0),
+                        BC, DIM))
                 # 等待动画：模型思考期间原地转圈 + 计时，一眼分辨「在跑」还是卡死
                 _wspin = _wait_start("等待模型响应")
                 try:
                     resp = _fc_call(  # [STREAM-PATCH v1]
-                        client, MODEL, messages,
+                        client, MODEL, _send_msgs,   # ★ [QQ-LIGHT v1]
                         temperature=0.7, max_tokens=MAX_REPLY_TOKENS,
                         timeout=API_TIMEOUT, tools=workspace.TOOL_SCHEMAS,
                         spin=_wspin,

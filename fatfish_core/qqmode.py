@@ -200,13 +200,26 @@ def _qq_media_guard(text):
        密码门禁形同虚设。这里在消息进模型**之前**把它中和成 «路径已屏蔽»。
     """
     keep, blocked, ph = [], 0, {}
-    root = os.path.normcase(_qq_media_root()) if _qq_media_root() else ""
+    # ★ 2026-10-23 修（真 bug，实测复现过）：`fatfish_core/qq_bridge` 是一个指向
+    #   `workspace/qq_bridge` 的**目录联接（junction）**，两者物理上是同一份数据，
+    #   但字符串前缀完全不同：
+    #       _qq_media_root() → E:\FATFISH\fatfish_core\qq_bridge\data\link\media
+    #       media.py 实际写 → E:\FATFISH\workspace\qq_bridge\data\link\media
+    #   于是 `p.startswith(root)` 永远是 False —— **群里每张图都被判成
+    #   「不在媒体目录内，已忽略」，鱼等于看不见任何图片**。
+    #   修法：两边都过 realpath 把联接解开再比（realpath 解析后完全一致）。
+    root = (os.path.normcase(os.path.realpath(_qq_media_root()))
+            if _qq_media_root() else "")
 
     def _stash(mo):
         nonlocal blocked
         raw = mo.group(1)
         p = _qq_norm(raw)
-        if root and p.startswith(root) and os.path.isfile(p):
+        try:
+            p_real = os.path.normcase(os.path.realpath(p)) if p else ""
+        except Exception:                               # noqa: BLE001
+            p_real = p
+        if root and p_real.startswith(root) and os.path.isfile(p_real):
             keep.append(raw)
             key = "\x00MEDIA%d\x00" % len(keep)
             ph[key] = "@" + raw
@@ -256,10 +269,22 @@ def _qq_owned(uid=None):
 def _qq_init_dirs():
     """定位 data/link/（与 qq_bridge/qqlink.py 保持一致）。"""
     try:
-        base = os.path.dirname(os.path.abspath(__file__))   # FATHFISHI.py 所在目录
+        base = os.path.dirname(os.path.abspath(__file__))   # 本模块所在目录
     except NameError:
         base = os.getcwd()
-    for cand in (base, os.getcwd(), workspace.get_workspace()):
+    # ★ 2026-10-23 修：拆包后本模块在 fatfish_core/ 下，base 变成 fatfish_core，
+    #   而那里残留一个**指向 workspace/qq_bridge 的目录联接**——旧逻辑先命中它，
+    #   _QQ["dir"] 就成了联接路径，后续与 media.py 写出的真实路径做字符串比对
+    #   时失配（附件全被误判，见 _qq_media_guard 的注释）。
+    #   这里把「程序根下的 workspace/」提到首位，优先拿到真实路径；
+    #   base / cwd / 程序根都保留作后备，换布局也不会找不到。
+    root = os.path.dirname(base)
+    cands = []
+    for c in (os.path.join(root, "workspace"), workspace.get_workspace(),
+              base, os.getcwd(), root):
+        if c and c not in cands:
+            cands.append(c)
+    for cand in cands:
         d = os.path.join(cand, "qq_bridge", "data", "link")
         if os.path.isdir(os.path.dirname(d)) or os.path.isdir(d):
             _QQ["dir"] = d
@@ -341,12 +366,15 @@ def _qq_maybe_interject():
     tail = o[-12:]
     sess = tail[-1].get("session") or ""
     lines = "\n".join("  %s：%s" % (m["user"], m["text"]) for m in tail)
+    # ★ 2026-10-24 与直通口径对齐（用户要求「能接梗就接」）。
+    #   这条路是攒批插话（passthrough=false 时才走），保留 min_msgs/min_sec
+    #   的节奏闸，只放宽「愿不愿意开口」这一层。
     text = ("【QQ群旁听】下面这些是群里最近的发言（都没有 @ 我，我只是看着）：\n"
             + lines +
-            "\n\n要不要插一句？**默认不回** —— 只有被点到、被直接问到、"
-            "或我正好握着别人不知道的硬信息时才开口。\n"
+            "\n\n要不要插一句？**接得上就接** —— 聊得正热闹、有梗可接、"
+            "或你正好有一句真想说，就开口；被点到、被问到更该回。\n"
             "想插就直接写要发的话，一句话，不超过 20 字，别提「旁听」；"
-            "其余情况一律只回 <skip>。")
+            "实在没词、或这场跟你没关系，就只回 <skip>。")
     _QQ["observe"] = []
     _QQ["last_interject"] = now
     _QQ["interject_times"].append(now)
@@ -373,18 +401,23 @@ def _qq_pt_prompt(batch):
     n = len(batch)
     head = ("【QQ群·直通】群里刚来了 %d 条消息（都没有 @ 我，我一直在听）：\n%s\n\n"
             % (n, "\n".join(lines)))
-    rule = ("怎么处理（**默认沉默**，这才是常态）：\n"
-            "  · 只有下面三种情况才开口：\n"
-            "      ① 点名道姓叫我，或直接冲我提问；\n"
-            "      ② 明确在求我办事（要文件 / 要查东西 / 要写代码 / 让我上手干活）；\n"
-            "      ③ 我手里正握着别人都不知道、且对当下真正有用的硬信息。\n"
-            "  · 除此之外**一律只回 <skip>** —— 闲聊、吐槽、玩梗、接梗、斗图、"
-            "情绪发泄、跟我的活不相干的，统统不接。\n"
-            "  · 拿不准就 <skip>。少说一句没人觉得奇怪，多说一句才扎眼。\n"
-            "  · 真要开口：一句话讲完，**不超过 20 字**；不复述对方的话、"
-            "不解释来龙去脉、不列 1/2/3、不用问句钓话。\n")
+    # ★ 2026-10-24 用户要求「放宽到能接梗就接」：原口径是「默认沉默 +
+    #   三条例外」，结果吐槽/玩梗/抛观点全被判成「不该接」，群里像块哑木头。
+    #   现改为「默认可以接」，把 <skip> 收窄成三种真不该出声的情形。
+    #   长度与不刷屏的约束保留 —— 放宽的是愿不愿意开口，不是话多。
+    rule = ("怎么处理（**能接就接** —— 你不是客服，是群里坐着的一个活人）：\n"
+            "  · 想接就接：有人吐槽、玩梗、抛观点、抬杠、闲聊，你接得上就接一句，"
+            "插科打诨、站个边、自嘲两句都行。跟群里的节奏合拍，比「正确」重要。\n"
+            "  · 只有这几种情况才回 <skip>：\n"
+            "      ① 纯口水或斗图（「哈哈」「+1」「收到」「[表情]」这类），你接不出内容；\n"
+            "      ② 别人的私事、吵架、点名针对谁 —— 不掺和、不站队、不当和事佬；\n"
+            "      ③ 你确实没词，硬接只会显得尬。\n"
+            "  · 长度：一般一句话，**20 字内**；真有东西要讲，两三句到顶，"
+            "不写论文、不列 1/2/3、不复述对方的话、不用问句钓话。\n"
+            "  · 别每条都接、别连着刷屏 —— 有来有回，像个人待在群里。\n")
     if n > 1:
-        rule += "  · 这 %d 条顶多挑一条回，多数情况该回 <skip>。\n" % n
+        rule += ("  · 这 %d 条里挑你最有话接的一条回，其他的不用管；"
+                 "全都不想接就 <skip>。\n" % n)
     return head + rule
 
 

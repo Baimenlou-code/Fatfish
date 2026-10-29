@@ -1537,10 +1537,36 @@ if __name__ == "__main__":
                     pick=self._net_cycle,
                     footer=self._net_menu_footer,
                     on_open=self._net_menu_open,
+                    actions=self._net_menu_actions,
                     logger=self._fatgui_say)
             except Exception:
                 self._net_menu = None
 
+
+            # ★ [PLUGIN-BAR v1] 顶栏第四个按钮「插件」—— 与「布局 / 功能 / 调度」并列。
+            #   anchor 取调度菜单的 strip，故排在它右边；调度没建起来就退到功能栏右边。
+            #   单独 try：插件栏失败不许拖垮功能抽屉与监控引擎。
+            #   .env 里 PLUGIN_BTN_LABEL 可改按钮文字，默认「插件」。
+            try:
+                import plugins as _plugins
+                self._plugin_mod = _plugins
+                _pa = getattr(getattr(self, "_net_menu", None), "strip", None)
+                if _pa is None:
+                    _pa = getattr(self._fatgui_side, "strip", None)
+                self._plugin_menu = InlineMenu(
+                    self.root,
+                    host=getattr(self, "_tbar", None),
+                    anchor=_pa,
+                    text=(os.environ.get("PLUGIN_BTN_LABEL") or "插件"),
+                    rows=self._plugin_menu_rows,
+                    pick=self._plugin_pick,
+                    footer=self._plugin_menu_footer,
+                    on_open=self._plugin_menu_open,
+                    actions=self._plugin_menu_actions,
+                    logger=self._fatgui_say)
+            except Exception:
+                self._plugin_menu = None
+                self._plugin_mod = None
             # 监控引擎：按 mon_on / mon_news_on 自动启停（与界面解耦）
             self._fatgui_auto = _eng.AutoRunner(
                 watchlist=os.path.join(_fp, "watchlist.txt"),
@@ -1554,7 +1580,8 @@ if __name__ == "__main__":
     def _stop_fatgui(self):
         """停车 + 销毁抽屉。任何异常都吞掉（关窗路径不能抛）。"""
         for name, fn in (("_fatgui_auto", "stop"), ("_fatgui_side", "destroy"),
-                         ("_net_menu", "destroy")):
+                         ("_net_menu", "destroy"),
+                         ("_plugin_menu", "destroy")):   # ★ [PLUGIN-BAR v1]
             obj = getattr(self, name, None)
             try:
                 if obj is not None and hasattr(obj, fn):
@@ -1973,9 +2000,11 @@ if __name__ == "__main__":
     def _net_menu_spec(self):
         """菜单清单：(settings 键, 中文名, 候选值, 候选值短名)。
 
-        ★ 5 项 = 联网域的全部可调项。前两项（判断/检索）原在功能抽屉的
+        ★ 5 项 = 联网域的**枚举**可调项。前两项（判断/检索）原在功能抽屉的
           「🌐 联网」联里；后三项（后端/路由/合并）是 2026-10-18 多后端那轮
-          新加的。现在它们统一挂在顶栏「联网」按钮的浮层里。
+          新加的。现在它们统一挂在顶栏〔调度〕按钮的浮层里。
+        ★ 2026-10-19：浮层还多了 3 行 **API key**（见 _net_api_rows）——
+          那些是自由文本，点开是输入框，不在本清单里循环。
         """
         return (
             ("net_mode", "联网", ("on", "off", "auto", "ai"),
@@ -2030,6 +2059,196 @@ if __name__ == "__main__":
         return default
 
     # ---------------------------------------------------- 菜单内容（数据源）
+    # ---- ★ 2026-10-19 调度浮层：API key 就地编辑（用户：「让调度可以更改
+    #      使用的各个 api key」）----
+    #   key 是自由文本，不是枚举档位 → 点它弹输入框，不参与 _net_cycle 的循环。
+    #   写入只走 envutil.env_set_line（只改那一行，不整文件重写），
+    #   真正的重配置仍由主循环的 /reload 统一完成（见 _net_request_reload）。
+    _APIKEY_SPEC = (
+        ("apikey:main", "🔑 主模型", ("FATFISH_API_KEY", "DEEPSEEK_API_KEY")),
+        ("apikey:verifier", "🔑 审查员", ("VERIFIER_API_KEY",)),
+        ("apikey:tavily", "🔑 Tavily", ("TAVILY_API_KEY",)),
+    )
+
+    @staticmethod
+    def _mask_key(v):
+        """掩码：只露前 6 + 后 4，绝不把整串 key 画到界面上。"""
+        v = str(v or "").strip()
+        if not v:
+            return "（未配置）"
+        if len(v) <= 12:
+            return "已配置 ••••"
+        return v[:6] + "…" + v[-4:]
+
+    def _env_key_of(self, names):
+        """按优先级取当前 key（只看进程环境；启动时 load_dotenv 已灌进来）。"""
+        for _n in names:
+            try:
+                _v = str(os.environ.get(_n, "") or "").strip()
+            except Exception:
+                _v = ""
+            if _v:
+                return _v
+        return ""
+
+    def _net_api_rows(self):
+        """浮层里的 3 行 key：[(key, 标签, 掩码), ...]。"""
+        out = []
+        for key, label, names in self._APIKEY_SPEC:
+            try:
+                out.append((key, label, self._mask_key(self._env_key_of(names))))
+            except Exception:
+                out.append((key, label, "（读不到）"))
+        return out
+
+    def _net_menu_actions(self):
+        """标题行右侧的动作图标：🔄 = 重载 .env（等同 /reload）。"""
+        return (("🔄", "重载 .env（等同 /reload）", self._net_reload),)
+
+    def _net_request_reload(self):
+        """把一条 "/reload" 投进输入队列 —— 主循环会当成你亲手敲的四个字。
+
+        ★ 为什么不在 GUI 里直接换 client：/reload 要同时重建 OpenAI client、
+          verify_tools、net_tools 三处配置；交给主循环**串行**做，才不会出现
+          「模型换了、审查员还是旧 key」这种半截状态（GUI 线程与 agent 线程
+          并发改全局变量，同样会踩这个坑）。
+        """
+        try:
+            OUT_Q.put({"kind": "msg", "text": "/reload"})
+            return True
+        except Exception:
+            return False
+
+    def _net_reload(self):
+        """🔄：重读 .env（本进程环境立即刷新）+ 请求主循环执行 /reload。"""
+        _reread = False
+        try:
+            from dotenv import load_dotenv
+            _envp = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+            load_dotenv(_envp, override=True)
+            _reread = True
+        except Exception:
+            pass
+        # Tavily 的 key 由 net_tools 单独持有一份 → 立刻同步，下一次搜索就用新值
+        try:
+            nt = self._net_tools_mod()
+            if nt is not None:
+                nt.set_api_key(self._env_key_of(("TAVILY_API_KEY",)))
+        except Exception:
+            pass
+        ok = self._net_request_reload()
+        try:
+            push_status("🔄 已重读 .env%s%s" % (
+                "（本进程环境已刷新）" if _reread else "",
+                "；已请求主循环 /reload" if ok else "；主循环不可达（仅本进程生效）"))
+        except Exception:
+            pass
+        return ok
+
+    def _net_write_env_key(self, names, value):
+        """把 key 写回 .env：只替换**那一行**，其余字节原样保留。"""
+        try:
+            from fatfish_core.envutil import env_set_line, env_has_key
+        except Exception as e:
+            return False, "缺少 envutil：%s" % e
+        _root = os.path.dirname(os.path.abspath(__file__))
+        _envp = os.path.join(_root, ".env")
+        # 首次改动前复制一份（.env 含密钥：只复制，绝不读/打印内容）
+        try:
+            if not getattr(self, "_env_key_backed", False) and os.path.exists(_envp):
+                self._env_key_backed = True
+                import shutil as _sh
+                _bak = os.path.join(_root, "_backup",
+                                    ".env.key_%s.bak"
+                                    % time.strftime("%Y%m%d_%H%M%S"))
+                os.makedirs(os.path.dirname(_bak), exist_ok=True)
+                _sh.copy2(_envp, _bak)
+        except Exception:
+            pass
+        # 更新「本来就在用的那个键名」—— 别平白多一行，把旧值顶成孤儿
+        target = names[0]
+        for _n in names:
+            try:
+                if env_has_key(_envp, _n):
+                    target = _n
+                    break
+            except Exception:
+                pass
+        try:
+            return env_set_line(_envp, target, value)
+        except Exception as e:
+            return False, "写 .env 失败：%s" % e
+
+    def _net_edit_key(self, key):
+        """点某个 🔑 行：弹输入框改 key → 写回 .env → 请求 /reload。"""
+        _spec = dict((k, (lb, ns)) for k, lb, ns in self._APIKEY_SPEC)
+        if key not in _spec:
+            return
+        label, names = _spec[key]
+        cur = self._env_key_of(names)
+        # 先收起浮层：它是 topmost，会盖住输入框
+        try:
+            _m = getattr(self, "_net_menu", None)
+            if _m is not None:
+                _m._close_panel()
+        except Exception:
+            pass
+        _hint = {
+            "apikey:main": "⚠️ 留空 = 清除主模型 key（/reload 会拒绝空 key 并保留旧值）",
+            "apikey:verifier": "留空 = 跟随主模型 key",
+            "apikey:tavily": "留空 = 关闭 Tavily 检索",
+        }.get(key, "留空 = 清除这一项")
+        new = None
+        try:
+            from tkinter import simpledialog
+            new = simpledialog.askstring(
+                "%s · API Key" % label.replace("🔑 ", ""),
+                "当前：%s\n\n输入新的 API Key（写回 .env，并立即 /reload）\n"
+                "%s\n取消 = 不改动" % (self._mask_key(cur), _hint),
+                parent=self.root, show="*")
+        except Exception:
+            new = None
+        if new is None:
+            return                        # 取消：一个字都不动
+        new = str(new).strip()
+        if new == cur:
+            try:
+                push_status("🔑 %s：未改动" % label)
+            except Exception:
+                pass
+            return
+        if new:
+            try:
+                from fatfish_core.envutil import _looks_like_key
+                if not _looks_like_key(new):
+                    try:
+                        push_status("⚠️ %s：key 只能是不含空白的 ASCII 字符" % label)
+                    except Exception:
+                        pass
+                    return
+            except Exception:
+                pass
+        ok, msg = self._net_write_env_key(names, new)
+        # 进程内环境同步（含备用键名），保证 _env_clean 立刻读到新值
+        for _n in names:
+            try:
+                os.environ[_n] = new
+            except Exception:
+                pass
+        if key == "apikey:tavily":
+            try:
+                nt = self._net_tools_mod()
+                if nt is not None:
+                    nt.set_api_key(new)
+            except Exception:
+                pass
+        try:
+            push_status("🔑 %s：%s%s"
+                        % (label, msg, "；已请求 /reload" if ok else ""))
+        except Exception:
+            pass
+        self._net_request_reload()
+
     def _net_menu_rows(self):
         """InlineMenu 的 rows()：[(key, 标签, 当前值短名), ...]。"""
         out = []
@@ -2041,6 +2260,8 @@ if __name__ == "__main__":
                 out.append((key, label, short.get(cur, cur or "关")))
         except Exception:
             pass
+        # ★ 2026-10-19：API key 也属于「调度怎么跑」—— 所以放进同一只浮层。
+        out.extend(self._net_api_rows())
         return out
 
     def _net_menu_footer(self):
@@ -2065,7 +2286,8 @@ if __name__ == "__main__":
         #   读 net_balance 的磁盘缓存（allow_net=False），绝不联网、绝不阻塞 Tk。
         for _ln in self._net_balance_lines():
             out.append(_ln)
-        out.append("点一行 = 下一档 · 改动仅本次运行生效（要固化请 /set save）")
+        out.append("点一行 = 下一档 · 🔑 = 改 API key（写回 .env）"
+                   " · 🔄 = 重载 .env（/reload）")
         return out
 
     def _net_menu_refresh(self):
@@ -2076,6 +2298,99 @@ if __name__ == "__main__":
                 m.refresh()
             except Exception:
                 pass
+
+    # ==================================================== ★ [PLUGIN-BAR v1] 插件栏
+    # 顶栏第四个按钮「插件」，与「布局 / 功能 / 调度」并列。
+    # 位置链路：布局(_tgl) → 功能(side.strip) → 调度(net_menu.strip) → 插件(plugin_menu.strip)
+    #
+    # 三条原则（与其它栏一致）：
+    #   ① 业务全在 fatgui/plugins.py，本节只做 UI 转发，不碰进程细节；
+    #   ② 启停是耗时的（要等端口就绪），跑在后台线程，回调经 root.after 回主线程
+    #      —— 绝不在子线程里碰 Tk 控件；
+    #   ③ 每个方法整段 try，插件栏出任何问题都不许影响主程序。
+
+    def _plugin_menu_rows(self):
+        """InlineMenu 的 rows()：[(key, "📡 名字", "● 运行中"), ...]。"""
+        try:
+            pl = getattr(self, "_plugin_mod", None)
+            if pl is None:
+                return []
+            return pl.list_rows()
+        except Exception:
+            return []
+
+    def _plugin_menu_footer(self):
+        """底部小字：逐个插件的运行详情 + 操作提示。"""
+        out = []
+        try:
+            pl = getattr(self, "_plugin_mod", None)
+            if pl is None:
+                return ["插件模块未加载（fatgui/plugins.py）"]
+            for key, name, _state in pl.list_rows():
+                running, detail = pl.probe(key)
+                out.append("%s %s" % ("●" if running else "○", detail))
+            # ★ 桥接起来了但本体 QQ 模式没开 → 消息照样收不到，必须提示
+            try:
+                from fatfish_core import qqmode as _qm
+                if not _qm._QQ.get("on"):
+                    out.append("⚠️ 本体 QQ 模式未开：窗口里敲 /qq on")
+            except Exception:
+                pass
+            out.append("点一行 = 启动 / 停止 · ⟳ = 刷新状态")
+        except Exception:
+            pass
+        return out
+
+    def _plugin_menu_open(self):
+        """浮层刚弹出：立刻重探一次（进程可能已被外部启停）。"""
+        self._plugin_menu_refresh()
+
+    def _plugin_menu_actions(self):
+        """标题行右侧图标：⟳ = 重新探测状态。"""
+        return (("⟳", "刷新插件状态", self._plugin_menu_refresh),)
+
+    def _plugin_menu_refresh(self):
+        """刷新插件浮层（没开就什么都不做）。"""
+        m = getattr(self, "_plugin_menu", None)
+        if m is not None:
+            try:
+                m.refresh()
+            except Exception:
+                pass
+
+    def _plugin_pick(self, key):
+        """点一行：已运行则停止，否则启动。全程异步，完成回主线程刷 UI。"""
+        pl = getattr(self, "_plugin_mod", None)
+        if pl is None:
+            return
+        say = self._fatgui_say
+
+        def _on_event(kind, text):
+            # ★ 这个回调在后台线程里跑：绝不能直接碰 Tk，一律 after(0) 转主线程
+            def _ui():
+                try:
+                    if text:
+                        say("[插件] %s" % text)
+                    if kind in ("ok", "err", "done"):
+                        self._plugin_menu_refresh()
+                        if text:
+                            push_status("🧩 [插件] %s" % text)
+                except Exception:
+                    pass
+            try:
+                self.root.after(0, _ui)
+            except Exception:
+                pass
+
+        try:
+            action, ok = pl.toggle(key, _on_event)
+        except Exception as e:
+            say("[插件] 操作失败：%s" % e)
+            return
+        if not ok:
+            say("[插件] 未知插件：%s" % key)
+            return
+        say("[插件] %s → %s…" % (key, "启动" if action == "start" else "停止"))
 
     def _net_menu_open(self):
         """浮层刚弹出：作废用量缓存，免得显示 5 秒前的旧账。"""
@@ -2159,7 +2474,14 @@ if __name__ == "__main__":
         return out
 
     def _net_cycle(self, key):
-        """循环切换一个枚举（菜单点了就调它），并同步状态栏。"""
+        """点一行：枚举项循环到下一档；🔑 行弹输入框；🔄 走重载。"""
+        # ★ 2026-10-19：两类非枚举行先分流，别掉进下面的 spec 查表（一查就 return）
+        if key == "__reload__":
+            self._net_reload()
+            return
+        if str(key).startswith("apikey:"):
+            self._net_edit_key(key)
+            return
         spec = {k: (o, sh) for k, _lb, o, sh in self._net_menu_spec()}
         if key not in spec:
             return
@@ -5126,7 +5448,11 @@ def _selftest():
               str(_nm._btn.cget("text")) == _want_lbl,
               str(_nm._btn.cget("text")))
 
-        check("★ 菜单 5 行（联网域全部可调项）", len(w2._net_menu_rows()) == 5,
+        _spec_n = len(w2._net_menu_spec())
+        _key_n = len(w2._net_api_rows())
+        check("★ 菜单 %d 行（%d 档联网项 + %d 行 API key）"
+              % (_spec_n + _key_n, _spec_n, _key_n),
+              len(w2._net_menu_rows()) == _spec_n + _key_n and _key_n == 3,
               str(w2._net_menu_rows()))
         check("★ 每行都有标签和当前值",
               all(lb and vl for _k, lb, vl in w2._net_menu_rows()),
@@ -5135,7 +5461,8 @@ def _selftest():
         root.update()
         check("★ 悬停/点击能弹出浮层",
               _nm._open and _nm._ov is not None and _nm._ov.winfo_exists())
-        check("★ 浮层里正好 5 行控件", len(_nm._row_widgets) == 5,
+        check("★ 浮层行控件数与 rows() 一致",
+              len(_nm._row_widgets) == _spec_n + _key_n,
               str(len(_nm._row_widgets)))
         _gw = int(_nm._ov.winfo_width()) if _nm._ov is not None else 0
         _gh = int(_nm._ov.winfo_height()) if _nm._ov is not None else 0
@@ -5175,6 +5502,48 @@ def _selftest():
         _ft = w2._net_menu_footer()
         check("★ 菜单底部能看到「上次 / 最近」",
               any("上次" in s for s in _ft) and any("最近" in s for s in _ft), str(_ft))
+
+        # ---------- [24b] ★ 调度浮层：API key 就地编辑 + 🔄 重载（2026-10-19）
+        print("[24b] ★ 调度：API key 可改 + 🔄 = /reload")
+        _kr = w2._net_api_rows()
+        check("★ 三行 key（主模型 / 审查员 / Tavily）",
+              len(_kr) == 3 and all(k.startswith("apikey:") for k, _l, _v in _kr),
+              str(_kr))
+        check("★ key 行都有标签 + 掩码",
+              all(lb and vl for _k, lb, vl in _kr), str(_kr))
+        _mk = w2._mask_key("sk-1234567890abcdef")
+        check("★ 掩码只露前6后4（不把整串 key 画到界面上）",
+              w2._mask_key("") == "（未配置）" and "…" in _mk
+              and "1234567890abcdef" not in _mk, _mk)
+        _acts = list(w2._net_menu_actions())
+        check("★ 标题行挂了一个 🔄（= /reload）",
+              len(_acts) == 1 and _acts[0][0] == "🔄" and callable(_acts[0][2]),
+              str(_acts))
+        while True:                    # 清空队列，免得读到旧消息
+            try:
+                OUT_Q.get_nowait()
+            except Exception:
+                break
+        _req = w2._net_request_reload()
+        try:
+            _got = OUT_Q.get_nowait()
+        except Exception:
+            _got = None
+        check("★ 🔄 的实质 = 往主循环投一条 /reload",
+              bool(_req) and isinstance(_got, dict) and _got.get("text") == "/reload",
+              str(_got))
+        _nm._open_panel()
+        root.update()
+        _icon_hit = False
+        try:
+            for _w in _nm._title_head.winfo_children():
+                if str(_w.cget("text")) == "🔄":
+                    _icon_hit = True
+        except Exception:
+            pass
+        check("★ 浮层标题行真的画出了 🔄 图标", _icon_hit)
+        _nm._close_panel()
+        root.update()
         w2._net_unbind_hook()
         check("★ 解绑钩子不抛", w2._net_hook_bound is False)
         w2._net_bind_hook()
