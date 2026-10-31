@@ -1,0 +1,40 @@
+<Project>
+  <!--
+    Directory.Build.props —— 所有子项目统一编译约定
+    放在解决方案根目录，MSBuild 会自动向上查找并继承。
+  -->
+
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+
+    <!-- 可空与安全分析器：能在编译期抓住 null 引用、未使用变量等问题 -->
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+
+    <!--
+      有意屏蔽的代码分析规则（均为「风格/惯例」类，非正确性问题）：
+
+      CA1707  测试方法名含下划线 —— xUnit 业界通行写法（Method_Scenario_Expected）
+      CA1720  Schema.Object / Schema.String 含类型名 —— 这是 JSON Schema 的标准术语，
+              改成别的反而让调用方看不懂
+      CA1822  PathGuard.IsRootLevelFile / CheckSensitive 可标 static ——
+              故意保留实例方法，与 Resolve/ToRelative 等 API 保持一致的调用风格
+      CA1716  UiEvent.Error 与 VB 关键字冲突 —— 本项目只有 C#，不涉及 VB
+      CA1001  MainWindow 持有可释放字段 _ui —— 已在 Closed 事件里 DisposeAsync，
+              且 Window 生命周期由 WPF 管理，强行实现 IDisposable 反而容易漏调
+    -->
+    <NoWarn>$(NoWarn);CA1707;CA1720;CA1822;CA1716;CA1001</NoWarn>
+
+    <Product>FatFish 启动器</Product>
+    <Company>FatFish</Company>
+    <Version>2.0.1</Version>
+
+    <!-- 统一输出目录，便于排查 -->
+    <AppendTargetFrameworkToOutputPath>true</AppendTargetFrameworkToOutputPath>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <InvariantGlobalization>false</InvariantGlobalization>
+  </PropertyGroup>
+</Project>

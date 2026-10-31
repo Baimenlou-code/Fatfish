@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    FatFish.App —— WPF 外壳。
+    只负责「显示」与「输入」，全部业务逻辑在 FatFish.Core 里。
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>FatFish.App</RootNamespace>
+    <AssemblyName>FatFish</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+
+    <!-- 单文件发布相关（发布时才生效，调试不影响） -->
+    <RuntimeIdentifier Condition="'$(Configuration)'=='Release'">win-x64</RuntimeIdentifier>
+    <PublishSingleFile Condition="'$(Configuration)'=='Release'">true</PublishSingleFile>
+    <SelfContained Condition="'$(Configuration)'=='Release'">true</SelfContained>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\FatFish.Core\FatFish.Core.csproj" />
+  </ItemGroup>
+
+</Project>

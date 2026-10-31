@@ -1179,7 +1179,7 @@ cmd 会把那个括号当成子壳的开启，**提前关闭整段**，结果是
 > 同步记录 `.fatfish_tmp/commit_sync_20261029.txt`、提交 `f006eab`。
 
 **为什么 10-23 的改动拖到 10-29 才进仓库**：发布仓库 `main` 自 v1.2.3（10-19）后一直停着，
-而这三块开发直接做在主开发目录 `E:\FATFISH` 上。本节记录的是**开发日期 10-23、同步日期 10-29** 这一批。
+而这三块开发直接做在主开发目录 `<工作台根>` 上。本节记录的是**开发日期 10-23、同步日期 10-29** 这一批。
 
 ### 21.1 起手：92% 的直通轮次只回一行 `<skip>`
 
@@ -1339,3 +1339,148 @@ if not _qm._QQ.get("on"):
 > 📌 本文件由 `README.md` 更新记录章节剥离并重编而成。
 > 📌 新增记录请**直接追加在本文件末尾（第十三节之后）**，或按日期新建小节；README 不再承载更新记录。
 > 📌 最近一次增订：**2026-10-29 晚**（第二十一节：同步 QQ-LIGHT / 网络面板 API 编辑 / 插件栏，提交 `f006eab`）。
+
+---
+
+## 二十二、C# 2.0.1 交接：仓库从 Python 版改造为纯 C# 工程 · 2026-10-31
+
+> 一句话：**Python 版 v1.2.3 在此封版归档**，仓库本体交给 C# 重写版 —— **`2.0.1` · FatFish 启动器**。
+> 依据：当日会话全量操作记录、三份 oldver 归档（均附 `_MANIFEST.txt` 逐文件 sha256）、`git status --porcelain` 实测。
+
+### 22.1 起点：双岔树对照（动手前先证明"没差东西"）
+
+改造前有两棵树：`<工作台根>\`（开发树）与 `<工作台根>\fatfish\`（GitHub 仓库副本）。
+
+| 项 | 结果 |
+|---|---|
+| 顶层同名文件 | 31 项，**29 项 sha256 完全相同** |
+| 深一层共同文件（`fatfish_core/` `signatures/` `generated_code/`） | 47 个，**45 个相同** |
+| 唯一的两个内容差异 | `.env`（根 4,121 B / 10-31 00:37 ← 在跑的配置；仓库 2,009 B / 10-02）<br>`.gitignore`（根 224 B；仓库 312 B，更完整） |
+| 版本 | 两边同为 **v1.2.3**（`fatfish1.2.3.bat`） |
+| 仓库状态 | HEAD `a3bd4bd`，`git status` 干净 |
+
+**结论**：仓库没落后于开发版，源码层无差异，差异只有配置与杂物 —— 因此可以直接以仓库副本为上传基准。
+
+### 22.2 上传前基线快照
+
+```
+oldver\fatfish_20261031_194205_上传GitHub前_v1.2.3基线\
+  49 个文件 / 2.83 MB
+  _MANIFEST.txt     逐文件 sha256 + 字节数 + mtime
+  说明.md           来源、git HEAD、归档范围、排除项与理由
+  对照报告.md       本文 22.1 的完整版（含 .env / qq_bridge 敏感项复核）
+```
+
+有意排除：`.git/`（仓库历史另存）、`.env`（含密钥，不进归档）、`__pycache__/` `logs/` `generated_code/` `workspace/` `.fatfish_tmp/`（运行时产物）。
+
+### 22.3 根目录散件清场
+
+| 项 | 值 |
+|---|---|
+| 搬走 | 根一级 **34 个文件 / 3.28 MB** → `oldver\root_files_20261031_194638\` |
+| 留在原地 | `.env`（在跑的配置）、`环境约定.md`（工作约定） |
+| 目录 | **一个都没动**（16 个目录原地保留） |
+| 事后状态 | 根目录 = 16 个目录 + 2 个文件 |
+
+> ⚠️ **副作用**：源码离开根目录后，`<工作台根>\` 不再能独立启动；`.env` 仍是最新那份（10-31），仓库里的是 10-02 旧版。
+
+### 22.4 C# 工程迁移：296 MB → 3.95 MB
+
+`workspace\FatFishCS` → `<工作台根>\FatFishCS`（新建独立文件夹）。
+
+| 原件构成 | 体积 |
+|---|---|
+| `src\…\bin\` | 216.66 MB（605 个文件，含自包含单文件 `publish\FatFish.exe` **62.07 MB**） |
+| `src\…\obj\` | 13.94 MB |
+| `_buildcheck\` | 58.03 MB（每次编译检查发布一整套的遗留，按语言各一份） |
+| `_backup\` + `.fatfish_tmp\` | 3.58 MB |
+| **工程本体（迁移内容）** | **3.95 MB / 187 个文件** |
+
+迁移排除：`bin` `obj` `_buildcheck` `_backup` `logs` `.fatfish_tmp` `.vs` `TestResults` `*.user` `*.suo`。
+保留：`src\`（FatFish.App / Cli / Core）、`tests\`、`docs\`、`plugins\`、`.setup\`、`FatFish.slnx`、`global.json`、`build.cmd`、`run.cmd`、`deploy_*.bat`、`*_smoke.ps1`、`README.md`、`Directory.Build.props`。
+
+> 📌 源码只占原件 **1.3%**，其余 98.7% 是编译产物。这也是 `bin/obj` **必须**进 `.gitignore` 的理由：
+> GitHub 单文件上限 100 MB，而那个 62 MB 的 exe 一旦入库，历史永远瘦不下来。
+
+### 22.5 版本落地：2.0.0-dev → 2.0.1
+
+全项目唯一的版本源是 `Directory.Build.props`（SDK 风格项目会自动由它派生 AssemblyVersion / FileVersion / InformationalVersion，exe 属性页显示的就是 2.0.1）：
+
+```xml
+<Product>FatFish 启动器</Product>     <!-- 原 "FatFish" -->
+<Company>FatFish</Company>
+<Version>2.0.1</Version>              <!-- 原 "2.0.0-dev" -->
+```
+
+`src\` 内 101 个 `.cs` 全文检索 `2.0.0`：**0 处命中**，无第二处硬编码版本。
+
+### 22.6 拓印与填充
+
+| 步骤 | 结果 |
+|---|---|
+| 拓印到 `fatfish\FatFishCS\` | 187 文件，逐文件 sha256 与源**全部一致** |
+| 填充（上浮到仓库根） | `FatFishCS\` 的 15 项全部移到 `fatfish\` 根，**零冲突**，空目录已移除 |
+| 目标若已存在时的保护 | 先改名到 `_backup\pre_flatten_<时间戳>\`，不直接删除 |
+
+### 22.7 旧 Python 残留清理
+
+两处合计 **14,712 个文件 / 333.88 MB** → `oldver\python_leftovers_20261031_202733\`（附 `_MANIFEST.txt`）。
+
+| 位置 | 清理项 |
+|---|---|
+| 根目录 | `fatfish_core\`(86.18 MB) · `logs\`(197.08 MB) · `_backup\`(38.58 MB) · `_buildcheck\`(8.77 MB) · `generated_code\`(1.16 MB) · `__pycache__`(0.67 MB) · `signatures\` · `fatfish_manual\` · `radio\` |
+| 仓库 | `fatfish_core\` `signatures\` `logs\` `workspace\`(2 个缓存 json) `generated_code\` `_backup\` `__pycache__\` `.fatfish_tmp\` |
+
+执行前的两道保险：
+
+1. **体积体检**：逐项设上限，任何一项超限整批中止、一个文件都不动。
+   （专门防「把根目录 11.9 GB 的 `workspace\` 当成仓库里那 2 个 json」这类误伤 —— 二者同名不同物）
+2. **事后校验**：逐目录回查是否删净，异常逐条回报。
+
+有意保留：根目录的 `plugins\` / `config\`（工作台图像插件与配置，删了代看能力就废）、`oldver\`（归档本体）、`venv\`（Python 运行时）、`workspace\`（其他项目）、`art\`、`Eastmoney_api\`。
+
+### 22.8 仓库收口
+
+| 动作 | 说明 |
+|---|---|
+| `.gitignore` 补 C# 规则 | `bin/` `obj/` `*.user` `*.suo` `*.userosscache` `*.sln.docstates` `.vs/` `TestResults/` `publish/` `*.pdb` `*.dll` `*.exe` |
+| 误伤核查 | `git ls-files -i -c --exclude-standard` → **空**，没有任何已跟踪文件被新规则吞掉 |
+| `README.md` | Python 版 README 移出，C# 版 README 顶替 → git 记为 `M` |
+
+### 22.9 收口时的仓库状态
+
+```
+<工作台根>\fatfish\
+  Directory.Build.props  FatFish.slnx  global.json  README.md      ← 2.0.1 / FatFish 启动器
+  src\  tests\  docs\  plugins\  .setup\  global.json
+  build.cmd  run.cmd  deploy_pluginbar.bat  deploy_update.bat
+  gui_smoke.ps1  publish_smoke.ps1
+  .env  .gitignore  .git\
+```
+
+`git status --porcelain` 共 **62 条**：`D` **46** · `M` **2**（`README.md` / `.gitignore`）· `??` **14**（C# 工程内容）。
+
+### 22.10 回滚总表
+
+| 动作 | 回滚方式 |
+|---|---|
+| 删掉的 Python 源文件与目录 | `git checkout -- .`（文件仍在历史里）；或从 `oldver\python_leftovers_*\` 按相对路径搬回 |
+| 根一级 34 个文件 | 从 `oldver\root_files_20261031_194638\` 拷回 `<工作台根>\` |
+| 仓库 28 个旧版文件 | 从 `oldver\repo_files_20261031_202424\` 拷回，或 `git checkout -- .` |
+| 整个 v1.2.3 基线 | 从 `oldver\fatfish_20261031_194205_上传GitHub前_v1.2.3基线\` 覆盖回去，用 `_MANIFEST.txt` 校验 |
+
+### 22.11 遗留与待办
+
+| 项 | 状态 |
+|---|---|
+| `README.md` 第 3 行 | 仍写「原 Python 版本仍在 `<工作台根>` 正常运行」——**已不成立**，待改写 |
+| 提交与推送 | 尚未提交；后续按 `环境约定.md` 走 SSH（`ssh.github.com:443`），**不开代理** |
+| `workspace\FatFishCS` 原件 | 296 MB 仍在 `workspace\` 下，迁移属复制，未删 |
+| `workspace\bili_duty` | 7.2 GB 中约 **5 GB 是同 4 份 whisper 模型副本**（`large-v3-turbo` 1.5 GB ×4、`small` 461 MB ×2），用户明确"先不急" |
+| 根目录 `venv\`(2.5 GB) / `workspace\`(11.9 GB) | Python 时代遗产，去向待定 |
+
+---
+
+> 📌 本文件由 `README.md` 更新记录章节剥离并重编而成。
+> 📌 新增记录请**直接追加在本文件末尾**，或按日期新建小节；README 不再承载更新记录。
+> 📌 最近一次增订：**2026-10-31 晚**（第二十二节：C# 2.0.1 交接 —— 双岔树对照 / 基线快照 / 工程迁移 / 版本 2.0.1 / 旧 Python 残留清理 / 仓库收口）。

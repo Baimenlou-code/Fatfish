@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    FatFish.Cli —— 命令行版 / 诊断探针。
+
+    两个用途：
+      1. 端到端验证：不经过 WPF，直接用真实 API 跑一轮对话，
+         确认「配置加载 → SSE 解析 → 工具调用 → 审批 → 回填」整条链是通的。
+      2. 以后要做纯命令行版 FatFish 时，这里就是起点。
+
+    刻意用 net10.0（不带 -windows）：保证 Console 代码跨平台可编译，
+    将来可以部署到 Linux。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>FatFish.Cli</RootNamespace>
+    <AssemblyName>fatfish</AssemblyName>
+    <!-- 控制台程序用 UTF-8，避免中文输出乱码 -->
+    <InvariantGlobalization>false</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\FatFish.Core\FatFish.Core.csproj" />
+  </ItemGroup>
+
+</Project>

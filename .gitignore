@@ -16,3 +16,24 @@ workspace/
 
 # --- 构建产物：安装器只随 Release 分发，不进仓库 ---
 FATPACK*.bat
+
+# --- C# / .NET 构建产物（2026-10-31 迁移到 FatFishCS 2.0.1 后补）---
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.vs/
+TestResults/
+publish/
+*.pdb
+*.dll
+*.exe
+
+# --- 安装包测试残留与打包中间目录（2026-10-31 卸载回归事故后补）---
+dist/_test_install/
+dist/framework-dependent/
+
+# --- 安装包本身只随 Release 分发，不进仓库（2026-10-31）---
+dist/*.zip

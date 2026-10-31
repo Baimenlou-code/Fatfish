@@ -1,0 +1,29 @@
+{
+  "id": "demo-http",
+  "name": "演示：HTTP",
+  "version": "1.0.0",
+  "description": "演示 http 型插件：host 白名单 + GET 自动判定为只读。需要联网。",
+  "requires": ["net"],
+  "tools": [
+    {
+      "name": "demo_http_anything",
+      "description": "请求 httpbin.org/anything/{tag}，返回服务端看到的内容。用于确认插件能发 HTTP 请求、且 host 白名单生效。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tag": {
+            "type": "string",
+            "description": "任意标签，会拼进 URL 路径"
+          }
+        }
+      },
+      "run": {
+        "type": "http",
+        "method": "GET",
+        "url": "https://httpbin.org/anything/{tag}",
+        "hosts": ["httpbin.org"],
+        "timeout_seconds": 20
+      }
+    }
+  ]
+}

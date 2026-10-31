@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FatFish.slnx —— 解决方案骨架
+  说明：若 SDK 已安装，可用 `dotnet sln add` 重生成，内容等价。
+-->
+<Solution>
+  <Project Path="src/FatFish.Core/FatFish.Core.csproj" />
+  <Project Path="src/FatFish.App/FatFish.App.csproj" />
+  <Project Path="src/FatFish.Cli/FatFish.Cli.csproj" />
+  <Project Path="tests/FatFish.Core.Tests/FatFish.Core.Tests.csproj" />
+</Solution>

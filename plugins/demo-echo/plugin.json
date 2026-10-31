@@ -1,0 +1,28 @@
+{
+  "id": "demo-echo",
+  "name": "演示：回显",
+  "version": "1.0.0",
+  "description": "最小的 cmd 型插件：演示「参数走环境变量，绝不拼进命令」这条规矩。",
+  "tools": [
+    {
+      "name": "demo_echo",
+      "description": "把 text 原样回显，并附上当前工作目录。它的风险档是「高」——因为它能执行任意命令，而不是因为它真的危险。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "要回显的内容。可以包含空格、符号、中文。"
+          }
+        },
+        "required": ["text"]
+      },
+      "run": {
+        "type": "cmd",
+        "shell": "cmd",
+        "command": "echo 插件回显: [%FATFISH_ARG_TEXT%]\r\necho 工作目录: %CD%",
+        "timeout_seconds": 15
+      }
+    }
+  ]
+}

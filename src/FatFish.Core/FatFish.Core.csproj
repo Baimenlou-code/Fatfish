@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    FatFish.Core —— 纯逻辑内核，不依赖任何 UI 框架。
+    目标框架用 net10.0（不带 -windows），保证可单元测试、可跨平台验证。
+
+    不显式引用 System.Text.Json：
+    它是 net10.0 的框架内置程序集（Microsoft.NETCore.App 的一部分）。
+    再写一个 PackageReference 反而有「包版本与 SDK 自带版本不一致」导致
+    还原失败或出现 NU1605 降级警告的风险。用内置的最省事。
+
+    不开 IsAotCompatible：
+    Core 里用了 JsonSerializer.SerializeToElement<T>（反射路径），
+    开 AOT 分析会刷一屏 IL2026/IL3050 警告。等真正要做 AOT 时，
+    改用 JsonSerializerContext 源生成器再打开。
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>FatFish.Core</RootNamespace>
+    <IsTrimmable>false</IsTrimmable>
+  </PropertyGroup>
+
+</Project>

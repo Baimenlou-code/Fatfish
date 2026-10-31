@@ -1,0 +1,626 @@
+<Window x:Class="FatFish.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="肥鱼 FatFish 2.0"
+        Height="820" Width="1180"
+        MinHeight="520" MinWidth="820"
+        Background="{DynamicResource Chrome}"
+        FontFamily="{StaticResource UiFont}"
+        FontSize="12"
+        WindowStartupLocation="CenterScreen"
+        TextOptions.TextFormattingMode="Display"
+        ToolTipService.InitialShowDelay="300"
+        ToolTipService.BetweenShowDelay="120"
+        ToolTipService.ShowDuration="60000"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True">
+
+    <!--
+      ==========================================================================
+       Cheat Engine 7.5 布局：菜单 / 工具栏 / 左树右内容 / 底部日志 / 分格状态栏
+      ==========================================================================
+        行 0  菜单栏
+        行 1  工具栏（扁平彩色图标）
+        行 2  主体（左：工作台文件树；右：对话 + 输入）
+        行 3  横向拖动条
+        行 4  底部面板（日志 / 工具调用 两个页签）
+        行 5  状态栏（分格）
+      ==========================================================================
+    -->
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition x:Name="BottomSplitterRow" Height="5" />
+            <RowDefinition x:Name="BottomPanelRow" Height="160" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- ==================== 行 0：菜单栏 ==================== -->
+        <Menu Grid.Row="0" Style="{StaticResource CeMenu}">
+            <!--
+              菜单项全部带 ToolTip。原因：菜单里写的是「新建会话」「双人核验」这类
+              四个字的短词，第一次用的人只能靠猜 —— 猜错代价不低（清空对话、
+              切换核验模式都是立刻生效且不可撤销的）。悬停即可看到「会发生什么」。
+            -->
+            <MenuItem Header="文件(_F)"
+                      ToolTip="文件菜单（按 Alt+F 可展开）&#x0A;新建 / 清空会话、打开工作台目录、编辑配置、退出。">
+                <MenuItem Header="新建会话(_N)" InputGestureText="Ctrl+N" Click="OnNewSession"
+                          ToolTip="清掉当前对话、断开模型上下文，开一段新的。&#x0A;只是清空界面与模型记忆，磁盘上的历史会话文件仍然保留。&#x0A;快捷键 Ctrl+N。" />
+                <MenuItem Header="清空对话记录(_C)" Click="OnClearChat"
+                          ToolTip="和上面的「新建会话」是同一件事，只是提示文字不同。&#x0A;清空消息、重置上下文、把 token 用量统计归零。不删任何文件。" />
+                <Separator />
+                <MenuItem Header="打开工作台目录(_O)" Click="OnOpenWorkspace"
+                          ToolTip="用资源管理器打开当前工作台根目录。&#x0A;模型读写文件、执行命令都被限制在这个目录里 —— 它就是「路径沙箱」的边界。" />
+                <MenuItem Header="编辑配置文件 .env(_E)" Click="OnOpenEnv"
+                          ToolTip="打开「配置编辑器」窗口，而不是丢给记事本。&#x0A;按用途分组、每项一句说明；保存前自动校验 + 体检，并备份原文件。&#x0A;⚠ 改完需要重启程序（窗口里有「保存并重启」按钮）。" />
+                <Separator />
+                <MenuItem Header="退出(_X)" InputGestureText="Alt+F4" Click="OnExit"
+                          ToolTip="关闭整个程序（Alt+F4）。&#x0A;正在生成的回合会一起中断；后台任务不保证被清理，长任务请先确认再退出。" />
+            </MenuItem>
+
+            <MenuItem Header="编辑(_E)"
+                      ToolTip="编辑菜单（Alt+E）&#x0A;清输入框、复制对话、停止回合、切换双人核验模式。">
+                <MenuItem Header="清空输入框(_L)" Click="OnClearInput"
+                          ToolTip="只清空下方输入框里的草稿。&#x0A;已经发出去的消息不受影响。" />
+                <MenuItem Header="复制全部对话(_A)" Click="OnCopyAll"
+                          ToolTip="把当前对话按「角色：正文」拼成纯文本放进剪贴板。&#x0A;用于存档，或者贴给别处排障。没有消息时会提示「没有可复制的对话」。" />
+                <Separator />
+                <MenuItem Header="停止当前回合(_S)" InputGestureText="Esc" Click="OnStopClick"
+                          ToolTip="打断正在生成的回复，等同按 Esc。&#x0A;已经显示出来的内容会保留。&#x0A;若此刻正在执行工具（命令 / 脚本），子进程不一定立刻停下。" />
+                <Separator />
+                <MenuItem x:Name="VerifyMenu" Header="双人核验(_V)"
+                          ToolTip="第二个模型（审查员 AI）复核危险动作的模式。&#x0A;它和「人工报批」是两道独立的闸：这里全关掉，人工报批照样会弹窗。&#x0A;点开可看三档的含义。">
+                    <MenuItem Header="AUTO（仅有副作用的动作送审）" IsCheckable="True" IsChecked="True"
+                              Tag="auto" Click="OnVerifyMode"
+                              ToolTip="默认模式。&#x0A;只有「有副作用」的动作才送审查员复核：写文件、改文件、删文件、执行命令、起后台任务。&#x0A;只读动作（读文件 / 列目录 / 搜索）直接执行，省 token。" />
+                    <MenuItem Header="ALL（连只读也送审，token 消耗上升）" IsCheckable="True"
+                              Tag="all" Click="OnVerifyMode"
+                              ToolTip="连只读动作也送审：每一次读文件、列目录都要多跑一趟审查员模型。&#x0A;更严格，但每轮多一次模型调用，token 消耗明显上升。" />
+                    <MenuItem Header="OFF（只剩人工报批一道闸）" IsCheckable="True"
+                              Tag="off" Click="OnVerifyMode"
+                              ToolTip="关闭审查员 AI。&#x0A;危险动作仍然会弹窗问你（人工报批那道闸还在），但不再有第二个模型替你挑错。" />
+                </MenuItem>
+            </MenuItem>
+
+            <MenuItem Header="视图(_V)"
+                      ToolTip="视图菜单（Alt+V）&#x0A;控制左侧文件树、底部面板是否显示。">
+                <MenuItem Header="侧边栏(_P)" IsCheckable="True" IsChecked="True" Click="OnToggleSidebar"
+                          ToolTip="显示 / 隐藏左侧「工作台文件」面板。&#x0A;隐藏后中间的对话区会自动变宽。" />
+                <MenuItem Header="日志面板(_L)" IsCheckable="True" IsChecked="True" Click="OnToggleBottom"
+                          ToolTip="显示 / 隐藏底部面板。&#x0A;里面分两页：「日志」是程序运行记录，「工具调用」是每次工具调用的流水。" />
+                <Separator />
+                <MenuItem x:Name="ThemeMenu" Header="夜间模式(_D)" IsCheckable="True" Click="OnToggleTheme"
+                          ToolTip="整窗切换配色：白底黑字 ↔ 黑底白字。&#x0A;运行时立即生效，不需要重启，对话内容与正在生成的回复都不受影响。&#x0A;与工具栏里那个月亮／太阳按钮是同一个开关。&#x0A;选择不写回 .env —— 想默认夜间，就在 .env 里加一行 UI_THEME=dark。" />
+            </MenuItem>
+
+            <MenuItem Header="帮助(_H)"
+                      ToolTip="帮助菜单（Alt+H）&#x0A;查快捷键、看运行时信息。">
+                <MenuItem Header="快捷键(_K)" Click="OnShowShortcuts"
+                          ToolTip="列出全部键盘快捷键与鼠标操作：&#x0A;Enter / Shift+Enter / Esc / Ctrl+N / 双击文件树 / 拖动分隔条。" />
+                <Separator />
+                <MenuItem Header="关于肥鱼(_A)" Click="OnAbout"
+                          ToolTip="查看版本、内核状态、模型、工作台路径与账户余额等运行时信息。&#x0A;提问前想知道「现在到底跑的是哪个模型、哪个目录」，点这里最快。" />
+            </MenuItem>
+        </Menu>
+
+        <!-- ==================== 行 1：工具栏 ==================== -->
+        <Border Grid.Row="1"
+                Background="{DynamicResource Chrome}"
+                BorderBrush="{DynamicResource LineStrong}"
+                BorderThickness="0,1,0,1"
+                Padding="4,3">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0" Orientation="Horizontal">
+                    <!--
+                      工具栏只有彩色图标，没有文字 —— 所以每个按钮的 ToolTip 必须写清三件事：
+                        图标长什么样（便于对应）、点了做什么、有什么后果。
+                      只写「新建会话」这种复述按钮名的提示，等于没写。
+                    -->
+                    <Button Style="{StaticResource ToolButton}"
+                            ToolTip="新建会话　Ctrl+N&#x0A;绿色「＋」：清空当前对话、断开上下文，开一段新的。&#x0A;磁盘上的历史会话文件（logs\chat_*.jsonl）不会被删除。"
+                            Click="OnNewSession">
+                        <TextBlock Text="&#xE710;" FontFamily="{StaticResource IconFont}"
+                                   FontSize="15" Foreground="{DynamicResource IconGreen}" />
+                    </Button>
+
+                    <Button Style="{StaticResource ToolButton}"
+                            ToolTip="清空对话记录&#x0A;红色「删除」图标：清空消息、重置模型上下文、把用量统计归零。&#x0A;效果与「新建会话」相同，只是提示语不同；不删任何文件。"
+                            Click="OnClearChat">
+                        <TextBlock Text="&#xE74D;" FontFamily="{StaticResource IconFont}"
+                                   FontSize="15" Foreground="{DynamicResource IconRed}" />
+                    </Button>
+
+                    <Rectangle Style="{StaticResource ToolSep}" />
+
+                    <Button Style="{StaticResource ToolButton}"
+                            ToolTip="打开工作台目录&#x0A;黄色文件夹：用资源管理器打开模型可读写的根目录。&#x0A;模型想读写这个目录之外的东西，会被路径沙箱直接拦下。"
+                            Click="OnOpenWorkspace">
+                        <TextBlock Text="&#xE8B7;" FontFamily="{StaticResource IconFont}"
+                                   FontSize="15" Foreground="{DynamicResource IconAmber}" />
+                    </Button>
+
+                    <Button Style="{StaticResource ToolButton}"
+                            ToolTip="编辑配置 .env&#x0A;灰色齿轮：打开配置编辑器窗口（不是记事本）。&#x0A;API Key、模型名、联网后端、审查员、生图插件都在里面，按用途分组。&#x0A;保存前会校验并备份原文件；改完点「保存并重启」即可生效。"
+                            Click="OnOpenEnv">
+                        <TextBlock Text="&#xE713;" FontFamily="{StaticResource IconFont}"
+                                   FontSize="15" Foreground="{DynamicResource IconGray}" />
+                    </Button>
+
+                    <Rectangle Style="{StaticResource ToolSep}" />
+
+                    <Button Style="{StaticResource ToolButton}"
+                            ToolTip="停止当前回合　Esc&#x0A;红色「叉」：只中断这一次生成，已经输出的内容保留。&#x0A;工具正在执行时（命令 / 脚本），子进程不一定能立刻结束。"
+                            Click="OnStopClick">
+                        <TextBlock Text="&#xE71A;" FontFamily="{StaticResource IconFont}"
+                                   FontSize="15" Foreground="{DynamicResource IconRed}" />
+                    </Button>
+
+                    <Rectangle Style="{StaticResource ToolSep}" />
+
+                    <Button Style="{StaticResource ToolButton}"
+                            x:Name="SidebarButton"
+                            ToolTip="侧边栏　显示 / 隐藏&#x0A;蓝色「列表」图标：控制左侧工作台文件树。&#x0A;树里单击选中、双击用系统默认程序打开文件；隐藏后对话区自动变宽。"
+                            Click="OnToggleSidebar">
+                        <TextBlock Text="&#xE700;" FontFamily="{StaticResource IconFont}"
+                                   FontSize="15" Foreground="{DynamicResource IconBlue}" />
+                    </Button>
+
+                    <Button Style="{StaticResource ToolButton}"
+                            x:Name="BottomButton"
+                            ToolTip="日志面板　显示 / 隐藏&#x0A;蓝色「文档」图标：控制底部面板。&#x0A;里面两页：日志＝程序运行记录；工具调用＝模型每次调了什么都在这。"
+                            Click="OnToggleBottom">
+                        <TextBlock Text="&#xE8A5;" FontFamily="{StaticResource IconFont}"
+                                   FontSize="15" Foreground="{DynamicResource IconBlue}" />
+                    </Button>
+
+                    <Rectangle Style="{StaticResource ToolSep}" />
+
+                    <!--
+                      夜间模式：整窗配色切换（白底黑字 ↔ 黑底白字）。
+                      放在工具栏而不是菜单深处 —— 这是个「随手切一下」的开关，藏进菜单就没人会发现。
+                      图标跟着当前状态走：月亮 = 正在夜间，太阳 = 正在日间。颜色由 ThemeManager 换。
+                    -->
+                    <Button Style="{StaticResource ToolButton}"
+                            x:Name="ThemeButton"
+                            ToolTip="夜间模式&#x0A;现在是白底黑字 —— 点一下变黑底白字（按 CE 浅/深两版各取一套中性灰，图标仍是唯一的彩色）。&#x0A;运行时立即生效：不重启、不改布局，对话内容与正在跑的回合都不受影响。"
+                            Click="OnToggleTheme">
+                        <TextBlock x:Name="ThemeIcon"
+                                   Text="&#xE708;"
+                                   FontFamily="{StaticResource IconFont}"
+                                   FontSize="15"
+                                   Foreground="{DynamicResource IconViolet}"
+                                   VerticalAlignment="Center" />
+                    </Button>
+                </StackPanel>
+
+                <!-- 右侧：内核状态灯 + 模型名（对应 CE 工具栏右侧的进程信息区） -->
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center"
+                            ToolTip="内核状态灯 + 当前模型&#x0A;灯：绿＝已就绪，红＝缺 API Key 或初始化失败，灰＝还没开始初始化。&#x0A;右边文字是这次实际使用的模型名（.env 的 FATFISH_MODEL，默认 deepseek-flash），改动需重启。">
+                    <Ellipse x:Name="KernelDot" Width="7" Height="7" Margin="0,0,6,0"
+                             Fill="{DynamicResource IconGray}" />
+                    <TextBlock Text="{Binding KernelStatus}"
+                               FontSize="11"
+                               Foreground="{DynamicResource FgMuted}"
+                               VerticalAlignment="Center" />
+                    <TextBlock Text="{Binding ModelText}"
+                               FontSize="11"
+                               Foreground="{DynamicResource FgMuted}"
+                               Margin="14,0,6,0"
+                               VerticalAlignment="Center" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- ==================== 行 2：主体 ==================== -->
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition x:Name="SidebarColumn" Width="220" MinWidth="0" />
+                <ColumnDefinition x:Name="SideSplitterColumn" Width="5" />
+                <ColumnDefinition Width="*" MinWidth="380" />
+            </Grid.ColumnDefinitions>
+
+            <!-- 左：工作台文件树 -->
+            <Border x:Name="SidePanel" Grid.Column="0"
+                    Background="{DynamicResource SurfaceWhite}"
+                    BorderBrush="{DynamicResource LineStrong}"
+                    BorderThickness="0,0,1,0">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <!-- 面板标题条：CE 每个面板都有这么一条 -->
+                    <Border Grid.Row="0"
+                            Background="{DynamicResource HeaderFace}"
+                            BorderBrush="{DynamicResource Line}"
+                            BorderThickness="0,0,0,1"
+                            Padding="8,4"
+                            ToolTip="工作台文件树&#x0A;这里列出的就是模型能看、能改的全部范围（路径沙箱根目录）。&#x0A;单击选中，双击用系统默认程序打开；点左侧三角展开目录。&#x0A;bin、obj、node_modules、venv、.git 等目录被有意隐藏，避免刷屏。">
+                        <TextBlock Text="工作台文件" FontSize="11" FontWeight="SemiBold" />
+                    </Border>
+
+                    <TreeView x:Name="FileTree"
+                              Grid.Row="1"
+                              Background="{DynamicResource SurfaceWhite}"
+                              BorderThickness="0"
+                              Padding="2,4"
+                              ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                              ToolTip="双击文件＝用系统默认程序打开它。&#x0A;把鼠标停在某个文件上，可看完整路径、大小与修改时间。&#x0A;目录是懒加载的：第一次展开才会去读，避免启动时卡住。" />
+                </Grid>
+            </Border>
+
+            <GridSplitter x:Name="SideSplitter"
+                          Grid.Column="1"
+                          Style="{StaticResource CeSplitter}"
+                          Width="5"
+                          HorizontalAlignment="Stretch"
+                          VerticalAlignment="Stretch"
+                          ResizeDirection="Columns"
+                          ResizeBehavior="PreviousAndNext"
+                          Cursor="SizeWE"
+                          ToolTip="拖动调整左侧文件树的宽度。&#x0A;拖到最窄等于收起侧边栏（也可以按工具栏那个蓝色「列表」按钮）。" />
+
+            <!-- 右：对话 + 输入 -->
+            <Grid Grid.Column="2">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <!-- 对话标题条 -->
+                <Border Grid.Row="0"
+                        Background="{DynamicResource HeaderFace}"
+                        BorderBrush="{DynamicResource Line}"
+                        BorderThickness="0,0,0,1"
+                        Padding="8,4">
+                    <Grid>
+                        <TextBlock Text="对话" FontSize="11" FontWeight="SemiBold"
+                                   ToolTip="对话正文区&#x0A;左侧竖色条代表发言者：蓝＝你，橄榄绿＝肥鱼，灰＝系统提示（核验结果、工作台切换等）。&#x0A;右上角是消息条数。" />
+                        <TextBlock Text="{Binding MessageCountText}"
+                                   FontSize="11"
+                                   Foreground="{DynamicResource FgMuted}"
+                                   HorizontalAlignment="Right"
+                                   ToolTip="当前对话里的消息条数（含系统提示）。&#x0A;显示「无记录」表示刚清空过。" />
+                    </Grid>
+                </Border>
+
+                <!-- 消息区 -->
+                <ScrollViewer Grid.Row="1"
+                              x:Name="MessageScroll"
+                              Background="{DynamicResource SurfaceWhite}"
+                              VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled">
+                    <ItemsControl x:Name="MessageList">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <!-- 明确定义虚拟化面板：消息变多时只渲染可见区域 -->
+                                <VirtualizingStackPanel />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <!--
+                                  CE 风格：不做圆角气泡，改「左侧色条 + 姓名行 + 正文」的平铺行。
+                                  理由：气泡适合短对话，而这里常见整段代码/长文档，
+                                  平铺行能让左边界对齐，扫读成本低得多。
+                                -->
+                                <Border BorderBrush="{DynamicResource LineSoft}"
+                                        BorderThickness="0,0,0,1">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="3" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+
+                                        <Border x:Name="VoiceBar" Grid.Column="0"
+                                                Background="{DynamicResource VoiceAi}"
+                                                ToolTip="左侧色条＝发言者：蓝＝你，橄榄绿＝肥鱼，灰＝系统提示。" />
+
+                                        <StackPanel Grid.Column="1" Margin="11,7,12,9">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock x:Name="WhoText"
+                                                           Text="{Binding NameText}"
+                                                           FontWeight="SemiBold"
+                                                           FontSize="12"
+                                                           Foreground="{DynamicResource VoiceAi}"
+                                                           ToolTip="{Binding NameText, StringFormat='{}{0} 的发言'}" />
+                                                <TextBlock Text="{Binding TimeText}"
+                                                           FontSize="11"
+                                                           Foreground="{DynamicResource FgMuted}"
+                                                           Margin="8,0,0,0"
+                                                           ToolTip="这条消息的时间（时:分:秒）。&#x0A;流式回复显示的是「开始回复」那一刻，不是结束时间。" />
+                                            </StackPanel>
+
+                                            <TextBlock x:Name="BodyText"
+                                                       Text="{Binding Text}"
+                                                       TextWrapping="Wrap"
+                                                       FontSize="13"
+                                                       LineHeight="21"
+                                                       Margin="0,3,0,0"
+                                                       Foreground="{DynamicResource FgPrimary}" />
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
+
+                                <DataTemplate.Triggers>
+                                    <DataTrigger Binding="{Binding Kind}" Value="user">
+                                        <Setter TargetName="VoiceBar" Property="Background"
+                                                Value="{DynamicResource VoiceUser}" />
+                                        <Setter TargetName="WhoText" Property="Foreground"
+                                                Value="{DynamicResource VoiceUser}" />
+                                    </DataTrigger>
+
+                                    <DataTrigger Binding="{Binding Kind}" Value="system">
+                                        <Setter TargetName="VoiceBar" Property="Background"
+                                                Value="{DynamicResource VoiceSystem}" />
+                                        <Setter TargetName="WhoText" Property="Foreground"
+                                                Value="{DynamicResource FgMuted}" />
+                                        <Setter TargetName="BodyText" Property="FontFamily"
+                                                Value="{StaticResource MonoFont}" />
+                                        <Setter TargetName="BodyText" Property="FontSize" Value="11.5" />
+                                        <Setter TargetName="BodyText" Property="Foreground"
+                                                Value="{DynamicResource FgMuted}" />
+                                    </DataTrigger>
+                                </DataTemplate.Triggers>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+
+                <!-- 输入区 -->
+                <Border Grid.Row="2"
+                        Background="{DynamicResource Chrome}"
+                        BorderBrush="{DynamicResource LineStrong}"
+                        BorderThickness="0,1,0,0"
+                        Padding="6">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <!--
+                          ★ PreviewKeyDown 而不是 KeyDown。
+                            TextBox 内部（TextEditor）用「类处理器」处理 Enter：AcceptsReturn=True
+                            时插入换行并置 e.Handled=true。类处理器先于实例处理器执行，
+                            所以挂在冒泡 KeyDown 上的处理器永远等不到 Enter —— 表现就是
+                            「按回车只换行、从不发送」。隧道阶段的 Preview 则跑在它前面。
+                        -->
+                        <TextBox x:Name="InputBox"
+                                 Grid.Column="0"
+                                 MinHeight="58"
+                                 MaxHeight="120"
+                                 AcceptsReturn="True"
+                                 TextWrapping="Wrap"
+                                 VerticalScrollBarVisibility="Auto"
+                                 VerticalContentAlignment="Top"
+                                 FontSize="13"
+                                 PreviewKeyDown="OnInputKeyDown"
+                                 TextChanged="OnInputTextChanged"
+                                 ToolTip="在这里输入要说的话。&#x0A;Enter＝发送　Shift+Enter＝换行　Esc＝停止正在生成的回复。&#x0A;输入框会随内容自动变高，到 120 像素后出现滚动条。" />
+
+                        <!--
+                          ★ 2026-10-30：这里原先有一个**常驻**占位提示「Enter 发送　Shift+Enter 换行」
+                            （空输入时显示在输入框左上角）。用户要求去掉 —— 输入框上不挂常驻小字，
+                            键位说明留给输入框自己的 ToolTip 与「帮助 → 快捷键」。
+                            注意：预览用的 docs/ui_reference/input_hint.png 是这张旧版截图。
+                        -->
+
+                        <StackPanel Grid.Column="1" Margin="6,0,0,0" VerticalAlignment="Bottom">
+                            <Button x:Name="SendButton"
+                                    Content="{Binding SendButtonText}"
+                                    Width="82" Height="28"
+                                    Margin="0,0,0,5"
+                                    Click="OnSendClick"
+                                    IsEnabled="False"
+                                    ToolTip="发送你输入的内容（也可按 Enter）。&#x0A;回合进行中这个按钮会变成「停止」，点它等于按 Esc。" />
+
+                            <Button Content="清空"
+                                    Width="82" Height="24"
+                                    FontSize="11"
+                                    Padding="0"
+                                    Click="OnClearInput"
+                                    ToolTip="只清空输入框里的草稿。&#x0A;已经发出去的对话不受影响 —— 想清对话请用工具栏的「清空对话记录」。" />
+                        </StackPanel>
+                    </Grid>
+                </Border>
+            </Grid>
+        </Grid>
+
+        <!-- ==================== 行 3：横向拖动条 ==================== -->
+        <GridSplitter x:Name="BottomSplitter"
+                      Grid.Row="3"
+                      Style="{StaticResource CeSplitter}"
+                      Height="5"
+                      HorizontalAlignment="Stretch"
+                      VerticalAlignment="Stretch"
+                      ResizeDirection="Rows"
+                      ResizeBehavior="PreviousAndNext"
+                      Cursor="SizeNS"
+                      ToolTip="拖动调整底部面板的高度。&#x0A;往上拖能看到更多「日志 / 工具调用」的内容。" />
+
+        <!-- ==================== 行 4：底部面板 ==================== -->
+        <Border x:Name="BottomPanel" Grid.Row="4"
+                Background="{DynamicResource SurfaceWhite}"
+                BorderBrush="{DynamicResource LineStrong}"
+                BorderThickness="0,1,0,0">
+            <TabControl>
+                <TabItem Header="日志"
+                         ToolTip="程序自己的运行记录。&#x0A;启动自检、配置载入、联网与核验结果、工具输出、错误堆栈都在这一页。&#x0A;出问题时先看这里。长行会被截断显示，把鼠标停在那一行可看全文。">
+                    <ListBox x:Name="LogList"
+                             Style="{StaticResource CeListBox}"
+                             FontFamily="{StaticResource MonoFont}"
+                             FontSize="11"
+                             ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                             ToolTip="运行日志：每行形如「时:分:秒 级别 内容」。&#x0A;启动自检、配置载入、联网、核验裁决、工具输出、异常堆栈都会写进来。&#x0A;报错时把这里的最后几行贴出来，基本就能定位。">
+                        <!-- 日志行通常很长（带时间戳 + 路径），列表里只露出一截。
+                             每行各自带一个绑定到自身的 ToolTip，悬停就能看完整内容。 -->
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem" BasedOn="{StaticResource CeListBoxItem}">
+                                <Setter Property="ToolTip" Value="{Binding}" />
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                    </ListBox>
+                </TabItem>
+
+                <TabItem Header="工具调用"
+                         ToolTip="模型每一次工具调用的流水：时间、工具名、状态、参数、耗时或错误。&#x0A;「运行中」表示还在跑；「失败」右边那一栏就是错误原因（悬停可看全文）。">
+                    <ListBox x:Name="ToolList"
+                             Style="{StaticResource CeListBox}"
+                             ItemContainerStyle="{StaticResource CeListBoxItem}"
+                             ToolTip="工具调用流水，从左到右五列：&#x0A;时间 ｜ 工具名 ｜ 状态（运行中 / 成功 / 失败）｜ 参数（JSON，过长会省略）｜ 耗时或错误。&#x0A;参数和错误被省略时，把鼠标移到那一格可看全文。">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="2,1">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+
+                                    <TextBlock Grid.Column="0"
+                                               Text="{Binding TimeText}"
+                                               FontFamily="{StaticResource MonoFont}"
+                                               FontSize="11"
+                                               Foreground="{DynamicResource FgMuted}"
+                                               Margin="0,0,8,0"
+                                               ToolTip="这次工具调用的时间（时:分:秒）。" />
+
+                                    <TextBlock Grid.Column="1"
+                                               Text="{Binding ToolName}"
+                                               FontWeight="SemiBold"
+                                               FontSize="11"
+                                               Margin="0,0,8,0"
+                                               ToolTip="{Binding ToolName, StringFormat='工具名：{0}'}" />
+
+                                    <TextBlock Grid.Column="2"
+                                               x:Name="StateText"
+                                               Text="{Binding State}"
+                                               FontSize="11"
+                                               Foreground="{DynamicResource FgMuted}"
+                                               Margin="0,0,8,0"
+                                               ToolTip="运行中＝正在执行；成功＝工具正常返回；失败＝出错，右边一栏是错误原因（悬停可看全文）。" />
+
+                                    <TextBlock Grid.Column="3"
+                                               Text="{Binding Arguments}"
+                                               FontFamily="{StaticResource MonoFont}"
+                                               FontSize="11"
+                                               Foreground="{DynamicResource FgMuted}"
+                                               TextTrimming="CharacterEllipsis"
+                                               VerticalAlignment="Center"
+                                               ToolTip="{Binding Arguments}" />
+
+                                    <TextBlock Grid.Column="4"
+                                               Text="{Binding Detail}"
+                                               FontSize="11"
+                                               Foreground="{DynamicResource FgMuted}"
+                                               Margin="8,0,0,0"
+                                               TextTrimming="CharacterEllipsis"
+                                               MaxWidth="320"
+                                               ToolTip="{Binding Detail}" />
+                                </Grid>
+
+                                <DataTemplate.Triggers>
+                                    <DataTrigger Binding="{Binding State}" Value="成功">
+                                        <Setter TargetName="StateText" Property="Foreground"
+                                                Value="{DynamicResource IconGreen}" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding State}" Value="失败">
+                                        <Setter TargetName="StateText" Property="Foreground"
+                                                Value="{DynamicResource IconRed}" />
+                                    </DataTrigger>
+                                </DataTemplate.Triggers>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </TabItem>
+            </TabControl>
+        </Border>
+
+        <!-- ==================== 行 5：状态栏（分格） ==================== -->
+        <Border Grid.Row="5"
+                Background="{DynamicResource Chrome}"
+                BorderBrush="{DynamicResource LineStrong}"
+                BorderThickness="0,1,0,0"
+                Height="23">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <TextBlock Grid.Column="0"
+                           Text="{Binding StatusText}"
+                           FontSize="11"
+                           Foreground="{DynamicResource FgPrimary}"
+                           Margin="8,0"
+                           VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis"
+                           ToolTip="这一格显示最近一次操作的提示：&#x0A;模型状态、工具完成 / 失败、核验结论、工作台切换、错误信息都先在这里闪一下。&#x0A;完整历史在底部「日志」页。" />
+
+                <!-- ToolTip 一律用「字符串」而不是嵌套 StackPanel：
+                     App.xaml 里的全局 ToolTip 样式设了 ContentTemplate（为了长中文自动换行），
+                     而 ContentPresenter 会优先用 ContentTemplate 渲染内容 —— 内容若是 UIElement，
+                     它会被当成数据交给模板，最后显示成一串 System.Windows.Controls.StackPanel。
+                     这里用 StringFormat 把动态值拼进字符串，效果一样、风险为零。 -->
+                <Border Grid.Column="1" BorderBrush="{DynamicResource Line}" BorderThickness="1,0,0,0" Padding="9,0"
+                        ToolTip="{Binding WorkspaceText, StringFormat='{}工作台根目录 —— 路径沙箱的边界&#x0A;模型只能在这个目录里读写文件、执行命令，越界会被直接拒绝。&#x0A;&#x0A;{0}'}">
+                    <TextBlock Text="{Binding WorkspaceText}"
+                               FontSize="11"
+                               Foreground="{DynamicResource FgMuted}"
+                               VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis"
+                               MaxWidth="300" />
+                </Border>
+
+                <Border Grid.Column="2" BorderBrush="{DynamicResource Line}" BorderThickness="1,0,0,0" Padding="9,0"
+                        ToolTip="{Binding UsageText, StringFormat='{}最近一次模型调用的 token 用量：{0}&#x0A;in＝送进去的提示（系统提示 + 历史 + 工具结果）&#x0A;out＝模型吐出来的回复&#x0A;计＝两者合计&#x0A;清空对话后这里会归零为「—」。'}">
+                    <TextBlock Text="{Binding UsageText}"
+                               FontFamily="{StaticResource MonoFont}"
+                               FontSize="11"
+                               Foreground="{DynamicResource FgMuted}"
+                               VerticalAlignment="Center" />
+                </Border>
+
+                <!-- 余额格：点击刷新。
+                     Background="Transparent" 是必需的 —— Border 默认 null 背景，
+                     透明区域不参与命中测试，点了不会有任何反应（看起来像坏了）。 -->
+                <Border Grid.Column="3" BorderBrush="{DynamicResource Line}" BorderThickness="1,0,0,0" Padding="9,0"
+                        Background="Transparent"
+                        MouseLeftButtonDown="OnBalanceClick"
+                        ToolTip="账户余额（点击这一格立即刷新）&#x0A;DS＝DeepSeek 余额，TV＝Tavily 本月剩余搜索额度。&#x0A;图标分级：✅ 充足　🟡 偏紧　🔴 吃紧　⛔ 见底　⚪ 未知&#x0A;刷新会向服务商发一次查询请求，不消耗 token。">
+                    <TextBlock Text="{Binding BalanceText}"
+                               FontFamily="{StaticResource MonoFont}"
+                               FontSize="11"
+                               Foreground="{DynamicResource FgMuted}"
+                               VerticalAlignment="Center" />
+                </Border>
+
+                <Border Grid.Column="4" BorderBrush="{DynamicResource Line}" BorderThickness="1,0,0,0" Padding="9,0"
+                        ToolTip="{Binding ToolCountText, StringFormat='{}{0}&#x0A;&#x0A;「工具 N 个」是从注册表实数的（含插件带来的工具），不是写死的数字。&#x0A;「调用 M 次」是本会话里模型真正调用工具的次数。'}">
+                    <TextBlock Text="{Binding ToolCountText}"
+                               FontSize="11"
+                               Foreground="{DynamicResource FgMuted}"
+                               VerticalAlignment="Center" />
+                </Border>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

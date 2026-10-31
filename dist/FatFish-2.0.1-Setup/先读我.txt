@@ -1,0 +1,18 @@
+﻿FatFish 启动器 2.0.1 —— 安装包
+====================================================
+
+共两个包，按顺序用：
+
+  1. FatFish-2.0.1-Deps-dotnet10   微软运行时的安装器
+     → 解压，双击 install-deps.cmd（要联网，约 55 MB，不用管理员权限）
+     → 装好后窗口会写「安装成功」
+
+  2. FatFish-2.0.1-Setup           程序本体
+     → 解压，双击 install.cmd
+     → 会装到 %LOCALAPPDATA%\FatFish，建好开始菜单快捷方式
+     → 装完把 .env 里的 FATFISH_API_KEY 换成你自己的密钥
+
+已经装过运行时的电脑，第 1 步可以跳过（install-deps.cmd 会自己看出来）。
+
+卸载：开始菜单同目录的 uninstall.cmd，或「设置 → 应用 → FatFish 启动器」。
+      默认保留你的 .env、会话记录和插件。

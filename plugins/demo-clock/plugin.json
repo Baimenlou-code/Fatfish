@@ -1,0 +1,27 @@
+{
+  "id": "demo-clock",
+  "name": "演示：时间",
+  "version": "1.0.0",
+  "description": "最小的 python 型插件：读两个环境变量，打印一行 JSON。",
+  "requires": ["python"],
+  "tools": [
+    {
+      "name": "demo_now",
+      "description": "返回本机当前时间、工作目录和一句问候，用于确认插件系统是否工作。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "greeting": {
+            "type": "string",
+            "description": "要回显的问候语，缺省为「你好」"
+          }
+        }
+      },
+      "run": {
+        "type": "python",
+        "script": "now.py",
+        "timeout_seconds": 20
+      }
+    }
+  ]
+}

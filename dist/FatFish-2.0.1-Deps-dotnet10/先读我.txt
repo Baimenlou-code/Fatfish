@@ -1,0 +1,14 @@
+﻿FatFish 依赖包 —— .NET 10 桌面运行时
+====================================================
+
+这个包里没有 FatFish 本体，只有微软的运行时安装器。
+
+用法：双击 install-deps.cmd
+
+  · 需要联网，下载约 55 MB
+  · 装在 %LOCALAPPDATA%\Microsoft\dotnet，不需要管理员权限
+  · 不改系统 PATH、不写系统目录、不动注册表里的全局配置
+  · 已经装过的机器，双击后会直接告诉你「不用再装」
+  · 不想要了：删掉 %LOCALAPPDATA%\Microsoft\dotnet 这个文件夹
+
+装完再回到 FatFish-2.0.1-Setup 双击 install.cmd。

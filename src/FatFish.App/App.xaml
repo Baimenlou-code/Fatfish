@@ -1,0 +1,62 @@
+<Application x:Class="FatFish.App.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             StartupUri="MainWindow.xaml">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <!--
+                  当前皮肤：Cheat Engine 7.5 风格（浅色桌面工具感）。
+
+                  想换深色版时，只要新写一个 Theme/DarkTheme.xaml
+                  并替换下面这一行即可 —— 所有窗口都引用同一批资源键，
+                  不需要改任何 C# 代码或页面布局。
+                -->
+                <ResourceDictionary Source="Theme/CeTheme.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+
+            <!--
+              ======================================================================
+               悬停提示（ToolTip）的统一外观
+
+               ★ 这里是「隐式样式」：只写 TargetType、不写 x:Key，
+                 所以程序里**每一个** ToolTip 都自动套上它，
+                 不需要在几十个控件上逐个引用。
+
+               为什么必须统一规定，而不是让每个控件自己写：
+                 1. 默认 ToolTip 是系统白底 + 硬边框，压在这套浅灰界面上像一块补丁；
+                 2. 默认**不换行**。中文说明稍长就会拉成横贯屏幕的一整行，
+                    读的人得左右晃头 —— 这条最要命，也是最容易被忽略的。
+                    ContentTemplate 里的 TextWrapping + MaxWidth 就是治它的。
+
+               注意一个 WPF 细节：ContentTemplate 只在内容是「字符串」时生效。
+                 内容若是 StackPanel 之类的 UIElement（状态栏那几格要同时显示
+                 「说明 + 完整值」，就是这么写的），WPF 会直接呈现那个元素，
+                 此时由元素自己的 TextWrapping / MaxWidth 负责排版。
+                 两套写法共用同一个背景、边框与内边距，视觉上仍然一致。
+              ======================================================================
+            -->
+            <Style TargetType="ToolTip">
+                <Setter Property="Foreground" Value="{DynamicResource FgPrimary}" />
+                <Setter Property="Background" Value="{DynamicResource SurfaceWhite}" />
+                <Setter Property="BorderBrush" Value="{DynamicResource LineStrong}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="Padding" Value="9,6" />
+                <Setter Property="FontFamily" Value="{StaticResource UiFont}" />
+                <Setter Property="FontSize" Value="11.5" />
+                <Setter Property="HasDropShadow" Value="True" />
+                <Setter Property="MaxWidth" Value="460" />
+                <Setter Property="ContentTemplate">
+                    <Setter.Value>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding}"
+                                       TextWrapping="Wrap"
+                                       LineHeight="19"
+                                       MaxWidth="420" />
+                        </DataTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>
