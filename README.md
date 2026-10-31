@@ -3,6 +3,8 @@
 > 这是一个装在你自己电脑上的 AI 助手窗口。它不只会聊天 —— 它能读你的文件、改你的文件、跑命令、搜网页、画图，**而且只在你能指定的那个文件夹里动手**。
 >
 > 这份说明只讲怎么用。照着从上往下做，一次就能跑起来。
+>
+> 🧩 **可选插件**（视觉理解 / 文生图 / 以图生图）在另一个仓库：**[FatFish-Plugins](https://github.com/Baimenlou-code/FatFish-Plugins)** —— 装法见第五节。
 
 ---
 
@@ -213,6 +215,8 @@ FATFISH_API_KEY=sk-你的密钥
 插件 = 磁盘上的**一个文件夹**，里面有一份 `plugin.json`。
 
 **装**：把插件文件夹整个拷进工作台目录下的 `plugins` 里，就成了 `plugins\插件名\plugin.json`。
+
+**哪有现成的**：官方插件合集在 [FatFish-Plugins](https://github.com/Baimenlou-code/Fatfish-Plugins) —— 视觉理解、生图两插件都在里面，下载 zip 解压后把文件夹拷进 `plugins\` 就行。
 
 **用**：点顶栏的 **「插件」** 按钮，从按钮下面弹出一个列表：
 
