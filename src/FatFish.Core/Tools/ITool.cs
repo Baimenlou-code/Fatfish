@@ -98,6 +98,17 @@ public sealed class ToolContext
     public WorkspaceSession? Workspace { get; init; }
 
     /// <summary>
+    /// 工地登记簿（一个常用工作台 + 若干临时工地）。为 null 表示宿主未启用该功能。
+    /// </summary>
+    /// <remarks>
+    /// ★ 它只是「记住有哪些名字/路径」，**不参与**边界判断 ——
+    ///   进工地仍然走 <see cref="WorkspaceSession.ChangeTo"/>，
+    ///   也就是说默认作业区之外的工地照样要用户批准。
+    ///   如果让本类也判一次边界，两处迟早不一致，而不一致的方向一定是更宽松的那份生效。
+    /// </remarks>
+    public WorkspaceSites? Sites { get; init; }
+
+    /// <summary>
     /// 当前生效的路径守卫。
     ///
     /// 设置了 <see cref="Workspace"/> 时它跟随会话（换根后自动变新）；
@@ -140,7 +151,14 @@ public sealed class ToolContext
     /// 为 null 时工具会自己从环境变量装配一个（CLI 之外的宿主可能不注入），
     /// 但那条路径会丢掉台账里的历史成功率调权 —— 所以正式宿主应当注入。
     /// </remarks>
-    public FatFish.Core.Net.NetService? Net { get; init; }
+    /// <remarks>
+    /// ★ 2026-11-06：由 <c>init</c> 放宽为 <c>set</c>。
+    ///   热重载换掉 NetService 之后，所有工具必须**下一次调用就拿到新实例** ——
+    ///   而工具每次执行都是读 <c>context.Net</c>。若这里仍是 init，
+    ///   就只能重建 ToolContext，而重建会让 Guard / Tickets / 插件宿主一起换掉，
+    ///   副作用远大于「换个联网后端」。改为 set 是影响面最小的做法。
+    /// </remarks>
+    public FatFish.Core.Net.NetService? Net { get; set; }
 
     /// <summary>
     /// 插件宿主；为 null 表示本进程没有插件。

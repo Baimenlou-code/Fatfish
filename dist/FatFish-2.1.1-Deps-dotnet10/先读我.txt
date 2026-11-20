@@ -11,4 +11,4 @@
   · 已经装过的机器，双击后会直接告诉你「不用再装」
   · 不想要了：删掉 %LOCALAPPDATA%\Microsoft\dotnet 这个文件夹
 
-装完再回到 FatFish-2.0.1-Setup 双击 install.cmd。
+装完再回到 FatFish-2.1.1-Setup 双击 install.cmd。

@@ -55,5 +55,5 @@ if (Test-Path $dotnetExe) {
 }
 
 Line '='
-Write-Host '  下一步：回到 FatFish-2.0.1-Setup，双击 install.cmd 安装程序本体。'
+Write-Host '  下一步：回到 FatFish-2.1.1-Setup，双击 install.cmd 安装程序本体。'
 Line '='

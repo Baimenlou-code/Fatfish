@@ -88,8 +88,7 @@ public class SamplePluginsTests
 
         Assert.Equal("liqiu-image", manifest.Id);
 
-        // 本机装的 liqiu-image 可能有多个工具（作者自用版）；只验 image_generate 这一条契约。
-        var tool = manifest.Tools.Single(t => t.Name == "image_generate");
+        var tool = Assert.Single(manifest.Tools);
 
         Assert.Equal("image_generate", tool.Name);
 

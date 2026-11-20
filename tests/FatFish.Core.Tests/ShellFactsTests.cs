@@ -164,6 +164,31 @@ public class ShellFactsTests
     }
 
     [Fact]
+    public void RenderPrecheck_PowerShellAction_SkipsCmdDialectScan()
+    {
+        if (SkipIfNotWindows())
+            return;
+
+        // 显式 shell=powershell：命令不经 cmd 解释，用 cmd 方言表判它「必然失败」是错的
+        // （实证：审查员据此驳回过一条能跑通的命令，理由写得还很有道理）
+        var text = Facts.RenderPrecheckBlock(new[] { ("ws_run_cmd", "Get-ChildItem", "powershell") });
+
+        Assert.DoesNotContain("必然失败", text);
+        Assert.Contains("跳过", text);
+    }
+
+    [Fact]
+    public void RenderPrecheck_CmdAction_StillScanned()
+    {
+        if (SkipIfNotWindows())
+            return;
+
+        var text = Facts.RenderPrecheckBlock(new[] { ("ws_run_cmd", "Get-ChildItem", "cmd") });
+
+        Assert.Contains("必然失败", text);
+    }
+
+    [Fact]
     public void RenderPrecheck_IgnoresEmptyCommands()
     {
         var text = Facts.RenderPrecheckBlock(new[] { ("ws_run_cmd", "  ") });

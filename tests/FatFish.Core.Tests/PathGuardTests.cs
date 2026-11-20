@@ -141,3 +141,57 @@ public sealed class PathGuardTests : IDisposable
         Assert.Equal("workspace/deep/file.txt", _guard.ToRelative(full));
     }
 }
+
+/// <summary>
+/// 盘符根回归测试。
+///
+/// 2026-11-13 实际踩到：<c>ws_cd E:\</c> 之后 <c>PathGuard.Root</c> 变成 <c>"E:"</c>
+/// （<c>TrimEnd(Sep)</c> 把盘符根削掉了），于是 <c>Resolve("")</c> 返回 <c>"E:"</c> ——
+/// 这在 Windows 上是「驱动器相对路径」，不是完全限定路径，
+/// 随后每个 <c>Directory.*</c> 都抛 "Basepath argument is not fully qualified"，
+/// 整个工作台当场不可用（连 ws_list 都做不了）。
+///
+/// 所以：盘符根的尾分隔符必须保留。相对路径的尾分隔符才该去掉。
+/// </summary>
+public sealed class PathGuardDriveRootTests
+{
+    [Fact]
+    public void DriveRoot_KeepsTrailingSeparator()
+    {
+        var driveRoot = Path.GetPathRoot(Path.GetTempPath())!;   // 形如 "C:\"
+        Assert.EndsWith(Path.DirectorySeparatorChar.ToString(), driveRoot,
+            StringComparison.Ordinal);
+
+        var guard = new PathGuard(driveRoot);
+
+        Assert.Equal(driveRoot, guard.Root);
+        Assert.Equal(driveRoot, guard.Resolve(""));
+        Assert.Equal(driveRoot, guard.Resolve(null));
+    }
+
+    [Fact]
+    public void DriveRoot_StillTrapsEscape()
+    {
+        var driveRoot = Path.GetPathRoot(Path.GetTempPath())!;
+        var guard = new PathGuard(driveRoot);
+
+        // 盘符根之下什么都在「里面」，但绝对路径本身仍要被拒绝
+        Assert.Throws<PathEscapeException>(() => guard.Resolve(@"\\server\share\evil.txt"));
+    }
+
+    [Fact]
+    public void NonRootPath_HasNoTrailingSeparator()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "fatfish_dr_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var guard = new PathGuard(dir + Path.DirectorySeparatorChar);
+            Assert.Equal(dir.TrimEnd(Path.DirectorySeparatorChar), guard.Root);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+}

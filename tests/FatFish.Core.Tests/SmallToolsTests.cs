@@ -40,7 +40,7 @@ public class SmallToolsTests : IDisposable
             Guard = _ws.Guard,
             Tickets = _ws.Tickets,
             Workspace = _ws,
-            Approval = new ApprovalPolicy(_ws) { Level = ApprovalLevel.ReadFree },
+            Approval = new ApprovalPolicy(_ws),
         };
 
         _registry = new ToolRegistry(new ITool[]
@@ -350,7 +350,7 @@ public class SmallToolsTests : IDisposable
         {
             Guard = new PathGuard(_home),
             Tickets = new ReadTicketStore(new PathGuard(_home)),
-            Approval = new ApprovalPolicy(new PathGuard(_home)) { Level = ApprovalLevel.ReadFree },
+            Approval = new ApprovalPolicy(new PathGuard(_home)),
         };
 
         var registry = new ToolRegistry(new ITool[] { new WsCdTool(), new WsCdApproveTool() });

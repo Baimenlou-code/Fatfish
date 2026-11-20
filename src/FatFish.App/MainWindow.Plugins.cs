@@ -23,7 +23,7 @@ namespace FatFish.App;
 ///     <see cref="OnPluginCommandPreviewKeyDown"/> 里的说明 —— 同样不需要改大文件。
 ///
 /// 与主窗口共享的实例成员：
-///   · <c>_workspaceSession</c>  取工作台根
+///   · <c>_workspaceSession</c>  取工作台根（E:\FATFISH）
 ///   · <c>_plugins</c>           PluginHost（真实插件的装载中心）
 ///   · <c>Log(string)</c>        写进底部日志面板
 ///   · <c>StatusText</c>         状态栏文字（绑定属性）
@@ -205,6 +205,14 @@ public partial class MainWindow
             var service = CreatePluginService(root);
             ContextMenu menu = await service.BuildMenuAsync(EmitPluginMessage).ConfigureAwait(true);
 
+            // QQ 桥接设置入口。放在菜单末尾而不是塞进 PluginSlotService：
+            // 那一层管的是「插件进程与链接层」，不该知道 QQ 有哪些参数。
+            menu.Items.Add(new Separator());
+
+            var qqSettings = new MenuItem { Header = "QQ 桥接设置…" };
+            qqSettings.Click += (_, _) => OpenQqLinkSettings();
+            menu.Items.Add(qqSettings);
+
             // 真实插件（PluginHost 里的那些）append 在后面：
             // 它们不是进程，没有"启停端口"可探，语义是"启用/禁用"。
             AppendCorePluginsMenu(menu, root);
@@ -326,6 +334,10 @@ public partial class MainWindow
         menu.Items.Add(reload);
     }
 
+    /// <summary>开着的插件设置窗（按插件 id 一份）。</summary>
+    private readonly Dictionary<string, PluginSettingsWindow> _pluginSettingsWindows =
+        new(StringComparer.Ordinal);
+
     private void TogglePlugin(PluginManifest manifest, bool enable)
     {
         try
@@ -357,8 +369,21 @@ public partial class MainWindow
                 return;
             }
 
+            // ★ 非模态 + 同一插件只留一份：已经开着就提到前面，不再开第二份。
+            //   以前是 ShowDialog，设置窗开着时整个程序不能动。
+            if (_pluginSettingsWindows.TryGetValue(manifest.Id, out var existing))
+            {
+                existing.Activate();
+                return;
+            }
+
             var window = new PluginSettingsWindow(_plugins, manifest, root, this, EmitPluginMessage);
-            window.ShowDialog();
+
+            window.Closed += (_, _) => _pluginSettingsWindows.Remove(manifest.Id);
+
+            _pluginSettingsWindows[manifest.Id] = window;
+            window.Show();
+            window.Activate();
         }
         catch (Exception ex)
         {

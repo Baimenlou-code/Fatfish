@@ -132,6 +132,12 @@ public sealed class ApprovalPolicy
     {
         "ws_mkdir", "ws_cd", "ws_cd_approve",
 
+        // 工地（2026-11-12）：与 ws_cd 同一档 —— 只动「工作台的形状」，
+        // 不改任何已有内容；换根的安全边界仍由 WorkspaceSession 守着
+        // （默认作业区之外的工地照样要 ws_cd_approve）。
+        // ws_site_list 是只读工具，所以不在这张表里。
+        "ws_site_new", "ws_site_enter", "ws_site_home", "ws_site_drop",
+
         // 插件重载：改变的是「本进程能调用哪些工具」，不落盘、可逆。
         // 与 mkdir / cd 同一档的理由也一样 —— 它每改一次都要弹窗的话，
         // 调试插件的人会被自己的弹窗淹没；但它确实改变了能力边界，
@@ -166,6 +172,83 @@ public sealed class ApprovalPolicy
         "ws_bg_python", "ws_run_python", "ws_run_cmd",
         "ws_delete", "ws_bg_cmd", "ws_bg_kill",
     };
+
+    /// <summary>
+    /// 「开一个新子代理」的工具名。
+    /// </summary>
+    /// <remarks>
+    /// ★ 为什么只列 <c>subagent_run</c>、不按 <c>subagent_</c> 前缀匹配：
+    ///   <c>subagent_status</c> 会被主循环每隔几秒轮询一次，<c>subagent_say</c> /
+    ///   <c>subagent_stop</c> 是「控制已有 job」。一旦把它们也塞进这张表，
+    ///   用户会被自己的轮询弹窗淹死 —— 那种机制活不过一天，最后一定是整个关掉。
+    ///   真正值得让人点头的只有一件事：**又开了一个看不见的自主执行**。
+    /// </remarks>
+    public HashSet<string> SubagentSpawnTools { get; init; } = new(StringComparer.Ordinal)
+    {
+        "subagent_run",
+    };
+
+    /// <summary>
+    /// 「开子代理要人工点头」—— 顶栏「审批」菜单底部那个勾选框，默认开。
+    /// </summary>
+    /// <remarks>
+    /// 与敏感文件同级的硬线：子代理是另一个模型、另一份上下文，
+    /// 它会带着自己的循环去读文件、（按权限）写盘、跑命令。
+    /// 「除敏感外免批」这类档位不该顺手把它也放过去 —— 那时的免批是针对
+    /// 「我盯着看的一次动作」，而子代理是**一段你看不见的连续动作**。
+    ///
+    /// 做成开关而不是写死：有人就是要一次开五个子代理跑批处理。
+    /// 那是他的选择，但必须在界面上显式关掉，而且这件事会留日志。
+    /// </remarks>
+    public bool RequireApprovalForSubagents
+    {
+        get => Volatile.Read(ref _requireSubagentApproval) != 0;
+        set => Volatile.Write(ref _requireSubagentApproval, value ? 1 : 0);
+    }
+
+    /// <summary>
+    /// 用 int 而不是 bool：与 <see cref="Level"/> 同一套理由 —— 写入在 UI 线程、
+    /// 读取在工具执行线程，普通字段没有可见性保证，而这种漏读只会表现为
+    /// 「偶尔少弹一次窗」，不报错、难复现。
+    /// </summary>
+    private int _requireSubagentApproval = 1;
+
+    /// <summary>
+    /// 每轮对话的回合上限（0 = 不限）。顶栏「审批」栏里的子选项，默认 25。
+    /// </summary>
+    /// <remarks>
+    /// ★ 为什么放在「审批」策略类里，而不是另建一个 AgentLimits：
+    ///   UI 上它就在审批菜单里，读它的又是 <c>AgentLoop</c>（本来就持有本实例）。
+    ///   再引入一个并行对象，只会多出一处「忘了同步」的地方。
+    ///
+    /// ★ 与 <see cref="Level"/> 同一套并发理由：写发生在 UI 线程（用户点菜单）、
+    ///   读取发生在 AgentLoop 的后台线程（每轮开始时），
+    ///   普通字段没有可见性保证 —— 漏读的表现是「上限改了不生效」，且偶发、不报错。
+    ///
+    /// ★ 取值应落在 <see cref="RoundLimitChoices"/> 里（0 表示不限）。
+    ///   落盘读回时也要过一遍 <see cref="IsValidRoundLimit"/>：
+    ///   手改 json 写出 99999 会让一次跑飞的对话烧掉整晚的 token。
+    /// </remarks>
+    public int RoundLimit
+    {
+        get => Volatile.Read(ref _roundLimit);
+        set => Volatile.Write(ref _roundLimit, value <= 0 ? 0 : value);
+    }
+
+    private int _roundLimit = DefaultRoundLimit;
+
+    /// <summary>默认回合上限（与 2026-11-06 之前写死的值一致）。</summary>
+    public const int DefaultRoundLimit = 25;
+
+    /// <summary>顶栏可选的上限（0 = 不限）。数组顺序即菜单顺序。</summary>
+    public static readonly IReadOnlyList<int> RoundLimitChoices = [15, 25, 35, 50, 100, 0];
+
+    /// <summary>上限的显示名（菜单与日志共用）。</summary>
+    public static string RoundLimitName(int limit)
+        => limit <= 0 ? "不限轮数" : $"{limit} 轮";
+
+    /// <summary>是否是允许的取值 —— 落盘读回时用它挡住手改出来的离谱数字。</summary>
+    public static bool IsValidRoundLimit(int limit) => RoundLimitChoices.Contains(limit);
 
     /// <summary>读操作的报批范围（对应 APPROVE_SCOPE）。</summary>
     public ApproveScope Scope { get; init; } = ApproveScope.Writes;
@@ -276,6 +359,29 @@ public sealed class ApprovalPolicy
             }
         }
 
+        // ---- ②' 开子代理：任何非严格档位都要人点头（可在顶栏「审批」里关）----
+        //   放在敏感文件之后、所有免批逻辑之前：它和敏感文件是同一级的硬线，
+        //   而不是「插件高危工具」那种会被更高档位顺手放行的一条。
+        if (RequireApprovalForSubagents && SubagentSpawnTools.Contains(toolName))
+            return ApprovalVerdict.Required(
+                "开子代理：它会带着自己的循环读文件、按权限写盘 / 跑命令，你看不到中间过程");
+
+        // ---- ②'' 覆盖「没读全」的文件：模型显式请求跳过读全检查 ----
+        //   位置在敏感文件、子代理之后，所有免批逻辑之前：
+        //   这是模型主动举手的动作，必须由人点头，任何档位都不该顺手放行。
+        //   ★ 为什么只看参数、不看覆盖率：判「有没有读全」要查读凭证，
+        //     而本类是纯策略层、拿不到 store。工具层已经先用「说明原因 + 拒绝」
+        //     挡过一次，这里只负责补上那道人工闸。
+        if (toolName == "ws_write"
+            && args is not null
+            && args.TryGetValue("confirm_partial_overwrite", out var forceWrite)
+            && forceWrite.ValueKind == JsonValueKind.True)
+        {
+            return ApprovalVerdict.Required(
+                "模型请求覆盖一个没有完整读过的文件（跳过读全检查）—— " +
+                "未读部分会按它写的内容被替换掉，请确认");
+        }
+
         // ---- ③ 读免批档：写 / 执行 / 插件写 仍然报批 ----
         if (level == ApprovalLevel.ReadFree)
         {
@@ -332,9 +438,23 @@ public sealed class ApprovalPolicy
     /// </summary>
     public bool NeverAutoApproves(string toolName, IReadOnlyDictionary<string, JsonElement>? args = null)
     {
+        // 开子代理：连「本次会话放行」都不认。放行一次 = 放行一整段自主执行。
+        if (RequireApprovalForSubagents && SubagentSpawnTools.Contains(toolName))
+            return true;
+
         var path = GetString(args, "path");
         if (!string.IsNullOrEmpty(path) && CurrentGuard.CheckSensitive(path).IsSensitive)
             return true;
+
+        // 跳过读全检查的覆盖：永不给「一键放行」——
+        // 那正是最需要人看一眼具体内容的时刻，不该被「这一批别问了」顺手免掉。
+        if (toolName == "ws_write"
+            && args is not null
+            && args.TryGetValue("confirm_partial_overwrite", out var forceWriteSkip)
+            && forceWriteSkip.ValueKind == JsonValueKind.True)
+        {
+            return true;
+        }
 
         // ★ 插件里「能跑命令 / 代码」的工具，与内置 ws_run_cmd 同等对待：
         //   永远不给一键放行。这个判断来自 PluginHost 的执行面推断，

@@ -143,9 +143,27 @@ public class AgentLoopTests : IDisposable
 
     private (AgentLoop Loop, TestObserver Observer, SequenceHandler Handler) Build(params string[] script)
     {
+        var (loop, observer, handler, _) =
+            BuildWithLimits(optionsMaxRounds: 4, policyRoundLimit: ApprovalPolicy.DefaultRoundLimit, script);
+
+        return (loop, observer, handler);
+    }
+
+    /// <summary>
+    /// 同 <see cref="Build"/>，但把「两个上限」显式暴露出来。
+    /// </summary>
+    /// <param name="optionsMaxRounds">
+    /// <c>&gt; 0</c> 表示构造期硬上限（压过策略）；<c>0</c> 表示「听策略的」。
+    /// </param>
+    /// <param name="policyRoundLimit">策略里的可运行时上限（顶栏审批栏那一项）。</param>
+    private (AgentLoop Loop, TestObserver Observer, SequenceHandler Handler, ApprovalPolicy Policy) BuildWithLimits(
+        int optionsMaxRounds,
+        int policyRoundLimit,
+        params string[] script)
+    {
         var guard = new PathGuard(_root);
         var tickets = new ReadTicketStore(guard);
-        var policy = new ApprovalPolicy(guard) { Level = ApprovalLevel.ReadFree };
+        var policy = new ApprovalPolicy(guard) { RoundLimit = policyRoundLimit, Level = ApprovalLevel.ReadFree };
 
         var context = new ToolContext
         {
@@ -174,10 +192,15 @@ public class AgentLoopTests : IDisposable
             Model = "test",
         };
 
-        var llm = new DeepSeekClient(options, new HttpClient(handler));
-        var loop = new AgentLoop(llm, registry, context, policy, new AgentOptions { MaxRounds = 4 });
+        // 0 = 不设构造期硬上限 → 真正生效的值来自 policy.RoundLimit
+        var agentOptions = optionsMaxRounds > 0
+            ? new AgentOptions { MaxRounds = optionsMaxRounds }
+            : new AgentOptions();
 
-        return (loop, new TestObserver(), handler);
+        var llm = new DeepSeekClient(options, new HttpClient(handler));
+        var loop = new AgentLoop(llm, registry, context, policy, agentOptions);
+
+        return (loop, new TestObserver(), handler, policy);
     }
 
     // ---------- 用例 ----------
@@ -354,6 +377,82 @@ public class AgentLoopTests : IDisposable
 
         Assert.True(result.HitRoundLimit);
         Assert.Equal(4, result.Rounds);
+    }
+
+    /// <summary>
+    /// 不设构造期上限（<c>MaxRounds = 0</c>）时，真正生效的是策略里的
+    /// <see cref="ApprovalPolicy.RoundLimit"/> —— 也就是顶栏「审批」栏那一项。
+    /// </summary>
+    /// <remarks>
+    /// ★ 这条守的是「接线」而不只是「取值」：
+    ///   把 AgentOptions.MaxRounds 的默认值从 25 改成 0 之后，
+    ///   如果循环还写着 <c>round &lt; _options.MaxRounds</c>，就会**一次都不跑**，
+    ///   表现为「模型从不回答」—— 那种 bug 在单测里只会表现为一条空的 FinalText。
+    /// </remarks>
+    [Fact]
+    public async Task Run_UsesPolicyRoundLimit_WhenOptionsLeavesItOpen()
+    {
+        var (loop, _, _, policy) = BuildWithLimits(
+            optionsMaxRounds: 0,
+            policyRoundLimit: 3,
+            SseToolCall("c1", "ws_read", "{\"path\":\"a.txt\"}"),
+            SseToolCall("c2", "ws_read", "{\"path\":\"a.txt\"}"),
+            SseToolCall("c3", "ws_read", "{\"path\":\"a.txt\"}"),
+            SseToolCall("c4", "ws_read", "{\"path\":\"a.txt\"}"),
+            SseToolCall("c5", "ws_read", "{\"path\":\"a.txt\"}"));
+
+        Assert.Equal(3, policy.RoundLimit);
+
+        var result = await loop.RunAsync("无限循环", new TestObserver());
+
+        Assert.True(result.HitRoundLimit);
+        Assert.Equal(3, result.Rounds);
+    }
+
+    /// <summary>
+    /// 构造期硬上限压过策略 —— CLI 与单测靠这条保证「不被某台机器的用户偏好影响」。
+    /// </summary>
+    [Fact]
+    public async Task Run_ExplicitMaxRounds_OverridesPolicyLimit()
+    {
+        var (loop, _, _, policy) = BuildWithLimits(
+            optionsMaxRounds: 2,
+            policyRoundLimit: 100,
+            SseToolCall("c1", "ws_read", "{\"path\":\"a.txt\"}"),
+            SseToolCall("c2", "ws_read", "{\"path\":\"a.txt\"}"),
+            SseToolCall("c3", "ws_read", "{\"path\":\"a.txt\"}"),
+            SseToolCall("c4", "ws_read", "{\"path\":\"a.txt\"}"));
+
+        Assert.Equal(100, policy.RoundLimit);
+
+        var result = await loop.RunAsync("无限循环", new TestObserver());
+
+        Assert.True(result.HitRoundLimit);
+        Assert.Equal(2, result.Rounds);
+    }
+
+    /// <summary>
+    /// 「不限轮数」（<c>RoundLimit = 0</c>）时不该被上限打断 ——
+    /// 脚本给 5 个工具调用 + 1 个收尾回答，应当跑到模型自己结束。
+    /// </summary>
+    [Fact]
+    public async Task Run_UnlimitedRoundLimit_RunsUntilModelStops()
+    {
+        var (loop, _, _, _) = BuildWithLimits(
+            optionsMaxRounds: 0,
+            policyRoundLimit: 0,
+            SseToolCall("c1", "ws_read", "{\"path\":\"a.txt\"}"),
+            SseToolCall("c2", "ws_read", "{\"path\":\"a.txt\"}"),
+            SseToolCall("c3", "ws_read", "{\"path\":\"a.txt\"}"),
+            SseToolCall("c4", "ws_read", "{\"path\":\"a.txt\"}"),
+            SseToolCall("c5", "ws_read", "{\"path\":\"a.txt\"}"),
+            SseText("跑完了。"));
+
+        var result = await loop.RunAsync("一直跑", new TestObserver());
+
+        Assert.False(result.HitRoundLimit);
+        Assert.Equal(6, result.Rounds);
+        Assert.Equal("跑完了。", result.FinalText);
     }
 
     [Fact]

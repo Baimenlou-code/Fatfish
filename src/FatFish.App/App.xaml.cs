@@ -17,6 +17,31 @@ public partial class App : Application
 {
     protected override void OnStartup(StartupEventArgs e)
     {
+        // ★ 宿主模式（--loghost-file &lt;文件&gt; &lt;标题&gt;）：这是主进程拉起来当
+        //   「真控制台」用的，不是一个给用户看的窗口。必须在任何 WPF 初始化之前分叉 ——
+        //   晚一步就会多建主题、资源字典、事件钩子，而且 StartupUri 还会把
+        //   主窗口也建出来，等于多开一扇窗。
+        //
+        //   它只做一件事：拥有一个真控制台窗口，按字节偏移 tail 那个文件，
+        //   把新增的 UTF-8 内容原样写进自己的控制台。
+        //   主进程收尾时会 kill 整棵进程树，所以这里不需要退出条件。
+        if (e.Args.Length >= 3 && e.Args[0] == "--loghost-file")
+        {
+            LogHost.Run(e.Args[1], e.Args[2]);
+            Environment.Exit(0);
+            return;
+        }
+
+        // 自检模式（--trace-selftest <结果文件>）：只验证「从 GUI 进程起控制台 →
+        // 找到它的窗口 → 把字写进去」这条链，不建主窗口。用来在部署前确认
+        // 过程页的真控制台在本机可用（Windows 11 的默认终端设置会影响到这一步）。
+        if (e.Args.Length >= 2 && e.Args[0] == "--trace-selftest")
+        {
+            RunTraceSelfTest(e.Args[1]);
+            Environment.Exit(0);
+            return;
+        }
+
         base.OnStartup(e);
 
         // 未捕获异常统一兜底：绝不让窗口无声消失
@@ -802,6 +827,113 @@ public partial class App : Application
         catch
         {
             // 连弹窗都失败时只能放弃 —— 但不要让异常继续传播
+        }
+    }
+
+    /// <summary>
+    /// 过程页真控制台的一次性自检。
+    /// 只回答三个问题：宿主进程起得来吗、它的 conhost 窗口找得到吗、字写得进去吗。
+    /// </summary>
+    private static void RunTraceSelfTest(string reportPath)
+    {
+        var report = new System.Text.StringBuilder();
+        ConsoleLog? console = null;
+
+        try
+        {
+            var title = "FATFISH_TRACE_SELFTEST_" + Environment.ProcessId;
+            console = new ConsoleLog();
+
+            var root = System.IO.Path.GetDirectoryName(
+                System.IO.Path.GetFullPath(reportPath)) ?? ".";
+
+            var traceFile = System.IO.Path.Combine(root, "logs", "live", "trace_selftest.log");
+
+            var started = console.Start(title, traceFile, timeoutMs: 6000);
+            report.AppendLine("start=" + started);
+            report.AppendLine("file=" + traceFile);
+            report.AppendLine("pid=" + console.ProcessId);
+            report.AppendLine("exited=" + console.HasExited);
+            report.AppendLine("failure=" + console.LastFailure);
+
+            if (started)
+            {
+                report.AppendLine("hwnd=0x" + console.WindowHandle.ToString("X"));
+
+                console.Write("自检：中文一行 ✓\n");
+                console.Write("\u001b[36m自检：ANSI 青色\u001b[0m\n");
+
+                System.Threading.Thread.Sleep(1500);
+
+                report.AppendLine("alive=" + console.IsAlive);
+
+                try
+                {
+                    report.AppendLine("bytes=" + new System.IO.FileInfo(traceFile).Length);
+                }
+                catch (Exception ex)
+                {
+                    report.AppendLine("bytes? " + ex.Message);
+                }
+            }
+            else
+            {
+                // 哨兵：loghost 分支到底进没进
+                try
+                {
+                    var sentinelPath = traceFile + ".started";
+                    report.AppendLine("branch_entered=" + System.IO.File.Exists(sentinelPath));
+
+                    if (System.IO.File.Exists(sentinelPath))
+                        report.AppendLine("  sentinel=" + System.IO.File.ReadAllText(sentinelPath));
+                }
+                catch (Exception ex)
+                {
+                    report.AppendLine("branch? " + ex.Message);
+                }
+
+                // 没找到窗口时把现场抄下来：是窗口根本没创建，还是类名/标题不一样
+                var titles = ConsoleLog.ConsoleWindowTitles();
+                report.AppendLine("console_windows=" + titles.Count);
+
+                foreach (var t in titles)
+                    report.AppendLine("  [" + t + "]");
+
+                // 按标题找任意窗口：Windows 11 默认终端可能是 Windows Terminal，
+                // 那时窗口类名不是 ConsoleWindowClass。
+                foreach (var line in ConsoleLog.TopWindowTitles("FATFISH"))
+                    report.AppendLine("  * " + line);
+
+                foreach (var line in ConsoleLog.TopWindowTitles("Console"))
+                    report.AppendLine("  C " + line);
+
+                foreach (var line in ConsoleLog.TopWindowTitles("Terminal"))
+                    report.AppendLine("  T " + line);
+            }
+        }
+        catch (Exception ex)
+        {
+            report.AppendLine("exception=" + ex);
+        }
+        finally
+        {
+            try
+            {
+                console?.Dispose();
+            }
+            catch
+            {
+                // 自检收尾不抛
+            }
+        }
+
+        try
+        {
+            System.IO.File.WriteAllText(reportPath, report.ToString());
+        }
+        catch
+        {
+            // 报告写不出来就只能靠退出码
         }
     }
 }

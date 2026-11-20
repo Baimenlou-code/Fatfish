@@ -710,9 +710,9 @@ public class BackgroundJobTests : IDisposable
     [Fact]
     public void ReadOnlyBgTools_DoNotRequireApproval()
     {
-        // ★ 必须显式设档：ApprovalPolicy 默认是 Strict（每个动作都要批），
-        //   而这条测的是「读免批档下 list / tail 不弹窗」—— 不设档测的是 Strict，必然对不上。
-        var policy = new ApprovalPolicy(_guard) { Level = ApprovalLevel.ReadFree };
+        var policy = new ApprovalPolicy(_guard);
+
+        policy.Level = ApprovalLevel.ReadFree;
 
         Assert.False(policy.NeedsApproval("ws_bg_list").Need);
         Assert.False(policy.NeedsApproval("ws_bg_tail").Need);

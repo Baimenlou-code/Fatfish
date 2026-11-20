@@ -112,6 +112,43 @@ public partial class MainWindow
         }
     }
 
+    /// <summary>打开 QQ 桥接设置（白名单 / 提示词 / 权限）。保存后服务侧立即重载，无需重启。</summary>
+    private void OpenQqLinkSettings()
+    {
+        string? root = _workspaceSession?.Root;
+
+        if (string.IsNullOrWhiteSpace(root))
+        {
+            EmitPluginMessage("工作台根未知，打不开 QQ 设置");
+            return;
+        }
+
+        var window = new QqLinkSettingsWindow(root, QqLinkSettings.Load(root), () =>
+        {
+            _qqLink?.ReloadSettings();
+            EmitPluginMessage("QQ 设置已保存（下一条消息生效）");
+        })
+        {
+            Owner = this,
+        };
+
+        // ★ 非模态：设置窗开着时主窗口照常可用。
+        if (_qqSettingsWindow is not null)
+        {
+            _qqSettingsWindow.Activate();
+            return;
+        }
+
+        window.Closed += (_, _) => _qqSettingsWindow = null;
+
+        _qqSettingsWindow = window;
+        window.Show();
+        window.Activate();
+    }
+
+    /// <summary>开着的 QQ 设置窗（只留一份）。</summary>
+    private QqLinkSettingsWindow? _qqSettingsWindow;
+
     // ---------------------------------------------------------------- 跑一轮
 
     /// <summary>
@@ -146,7 +183,10 @@ public partial class MainWindow
         string who = (req.IsGroup ? "【QQ群】" : "【QQ私聊】") + req.Who;
         OnUi(() => AppendMessage("user", who + "：" + Shorten(req.Text, 400)));
 
-        var observer = new QqTurnObserver(this);
+        // 权限档决定「需人工确认的动作」怎么处理：
+        // low / normal 一律拒绝（人在手机上，弹窗会把回合永久卡死）；
+        // high 才自动放行。
+        var observer = new QqTurnObserver(this, _qqLink?.Settings.PermissionLevel ?? QqPermission.Normal);
 
         AgentRunResult result;
 
@@ -187,9 +227,19 @@ public partial class MainWindow
     private sealed class QqTurnObserver : IAgentObserver
     {
         private readonly MainWindow _window;
+        private readonly QqPermission _permission;
         private readonly StringBuilder _text = new();
 
-        public QqTurnObserver(MainWindow window) => _window = window;
+        public QqTurnObserver(MainWindow window)
+            : this(window, QqPermission.Normal)
+        {
+        }
+
+        public QqTurnObserver(MainWindow window, QqPermission permission)
+        {
+            _window = window;
+            _permission = permission;
+        }
 
         public void OnTextDelta(string text) => _text.Append(text);
 
@@ -220,10 +270,15 @@ public partial class MainWindow
         /// </summary>
         public ValueTask<bool> RequestApprovalAsync(ApprovalRequest request, CancellationToken ct)
         {
-            _window.Log("[QQ] ✋ 拒绝需人工确认的动作：" + request.Tool
-                        + "（" + request.Reason + "）—— QQ 上不批准，请到电脑上操作");
+            // 只有「高」档在这一层自动放行。默认与只读档一律拒绝：
+            // 结果会发进聊天，而人也不在电脑旁。
+            bool allow = _permission == QqPermission.High;
 
-            return ValueTask.FromResult(false);
+            _window.Log("[QQ] " + (allow ? "✅ 权限档=高，自动放行：" : "✋ 拒绝需人工确认的动作：")
+                        + request.Tool + "（" + request.Reason + "）"
+                        + (allow ? "" : " —— QQ 上不批准，请到电脑上操作"));
+
+            return ValueTask.FromResult(allow);
         }
     }
 }

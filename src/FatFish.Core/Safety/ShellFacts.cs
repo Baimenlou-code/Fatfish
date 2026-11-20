@@ -286,27 +286,56 @@ public sealed class ShellFacts
     }
 
     /// <summary>
-    /// 送审材料里的【机器预检结果】一段。
+    /// 送审材料里的【机器预检结果】一段（旧签名：一律按 cmd 方言扫）。
     /// </summary>
-    /// <param name="commands">(动作序号后缀, 命令文本) 的列表；非命令类动作不要传进来。</param>
+    /// <param name="commands">(动作名, 命令文本) 的列表；非命令类动作不要传进来。</param>
     public string RenderPrecheckBlock(IReadOnlyList<(string Name, string Command)> commands)
+        => RenderPrecheckBlock(commands.Select(c => (c.Name, c.Command, "cmd")).ToList());
+
+    /// <summary>
+    /// 送审材料里的【机器预检结果】一段，**按每条命令自己的解释器**决定要不要扫方言。
+    /// </summary>
+    /// <param name="commands">(动作名, 命令文本, 解释器) 的列表。</param>
+    /// <remarks>
+    /// ★ 2026-11-06 修：原来这里一律用 cmd 方言表扫。
+    ///   可 <c>ws_run_cmd</c> 有 <c>shell</c> 参数（cmd / powershell），
+    ///   传 powershell 时命令根本不经 cmd 解释 —— 再拿 cmd 方言表去扫，
+    ///   就会把完全正确的 <c>Get-ChildItem</c> 判成「必然失败」。
+    ///   实测代价：审查员据此驳回了一条本来能跑通的命令，理由还写得很有道理。
+    ///   判据自相矛盾比没有判据更糟。
+    /// </remarks>
+    public string RenderPrecheckBlock(IReadOnlyList<(string Name, string Command, string Shell)> commands)
     {
         var hits = new List<(string Name, string Command, ShellTrap Trap)>();
+        var skipped = 0;
 
-        foreach (var (name, command) in commands)
+        foreach (var (name, command, shell) in commands)
         {
             if (string.IsNullOrWhiteSpace(command))
                 continue;
+
+            // 显式指定了非 cmd 解释器 → cmd 方言表对它不适用，不能扫
+            if (!IsCmdShell(shell))
+            {
+                skipped++;
+                continue;
+            }
 
             foreach (var trap in CheckCommand(command))
                 hits.Add((name, command, trap));
         }
 
+        var skipNote = skipped == 0
+            ? string.Empty
+            : $"\n· 另有 {skipped} 条命令显式指定了非 cmd 解释器（powershell），" +
+              "已**跳过** cmd 方言扫描 —— 它们不走 cmd，别用 cmd 的规则判。";
+
         if (hits.Count == 0)
         {
             return "【机器预检结果】\n" +
                    "已对送审命令做方言扫描，**未发现明显的 shell 方言错误**。" +
-                   "（这只说明写法与目标 shell 相容，不代表业务逻辑正确。）";
+                   "（这只说明写法与目标 shell 相容，不代表业务逻辑正确。）" +
+                   skipNote;
         }
 
         var sb = new StringBuilder();
@@ -321,8 +350,21 @@ public sealed class ShellFacts
         }
 
         sb.Append("★ 上述条目若确认为真，请直接判「变更」并在「要求」里写明正确写法。");
+        sb.Append(skipNote);
 
         return sb.ToString();
+    }
+
+    /// <summary>这条命令是不是由 cmd 解释（未指定或指定 cmd）。</summary>
+    private static bool IsCmdShell(string? shell)
+    {
+        if (string.IsNullOrWhiteSpace(shell))
+            return true;
+
+        var s = shell.Trim();
+
+        return s.Equals("cmd", StringComparison.OrdinalIgnoreCase)
+            || s.Equals("cmd.exe", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string Clip(string s, int n)

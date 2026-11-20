@@ -1,5 +1,5 @@
 .env
-logs/
+/logs/
 generated_code/
 __pycache__/
 *.pyc
@@ -10,9 +10,13 @@ workspaceX/
 oldver/
 
 # --- 运行时产物（跑一次程序就会生成，不入库）---
-.fatfish_tmp/
-_backup/
-workspace/
+# 2026-11-20：加前导斜杠锚定到仓库根。
+# 原来的 `workspace/` 是任意层级匹配，Windows 上又不区分大小写，
+# 结果把 src/FatFish.Core/Tools/Workspace/ 整个源码目录也忽略了 ——
+# 该目录下新增的 32 个工具类一个都不会入库，克隆下来必然编译失败。
+/.fatfish_tmp/
+/_backup/
+/workspace/
 
 # --- 构建产物：安装器只随 Release 分发，不进仓库 ---
 FATPACK*.bat

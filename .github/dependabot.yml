@@ -1,0 +1,25 @@
+version: 2
+
+updates:
+  # 运行时零第三方依赖，但测试项目用 xunit / Microsoft.NET.Test.Sdk，
+  # 这些也该有人盯着。
+  - package-ecosystem: nuget
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    labels:
+      - dependencies
+
+  # workflow 里用的 action 版本也需要跟着升，否则会被逐步弃用。
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+    labels:
+      - dependencies

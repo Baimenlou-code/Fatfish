@@ -103,7 +103,7 @@ rem workspace\.env, which holds a DIFFERENT (older) API key than
 rem the repo-root one. Nothing errors - you just quietly talk to
 rem another account, which is exactly the kind of bug that only
 rem shows up on the bill.
-if exist "%~dp0..\..\.env" set "FATFISH_ENV=%~dp0..\..\.env"
+if exist "%~dp0.env" set "FATFISH_ENV=%~dp0.env"
 "%DOTNET_EXE%" run --project src\FatFish.App -c Debug
 exit /b %ERRORLEVEL%
 

@@ -2,6 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="肥鱼 FatFish 2.0"
+        Icon="/Assets/FatFish.ico"
         Height="820" Width="1180"
         MinHeight="520" MinWidth="820"
         Background="{DynamicResource Chrome}"
@@ -85,6 +86,22 @@
                 </MenuItem>
             </MenuItem>
 
+            <MenuItem Header="配置(_C)"
+                      ToolTip="配置菜单（Alt+C）&#x0A;热重载：改完 .env 或切换预设，不重启程序就生效。&#x0A;预设：一整套模型连接配置（地址 + 模型名 + key），切换即换模型。">
+                <MenuItem Header="热重载配置(_R)" InputGestureText="Ctrl+R" Click="OnReloadConfig"
+                          ToolTip="重新读 .env 与激活的预设，并重建模型 / 联网 / 审查员三处连接。&#x0A;不用重启，当前对话历史保留。&#x0A;正在生成回复时那一轮不被打断 —— 换客户端只影响下一次请求。" />
+                <Separator />
+                <MenuItem x:Name="PresetMenu" Header="预设(_P)"
+                          ToolTip="一整套可切换的配置：接口地址 + 模型名 + key（可含审查员那一套）。&#x0A;点选即激活并立刻热重载；当前激活项前面有勾。" />
+                <MenuItem Header="把当前配置存为预设(_S)" Click="OnSavePresetAs"
+                          ToolTip="把此刻真正生效的那套连接配置存成一个预设文件。&#x0A;名字取当前模型名；同名会先问是否覆盖。&#x0A;文件在 工作台\config\presets\ 下，可以直接编辑。" />
+                <MenuItem Header="打开预设目录(_D)" Click="OnOpenPresetDir"
+                          ToolTip="用资源管理器打开 工作台\config\presets\。&#x0A;每条预设都是一个 .env 文件，可以复制、改名、手改。" />
+                <Separator />
+                <MenuItem Header="显示配置来源(_W)" Click="OnShowConfigSource"
+                          ToolTip="列出这次实际读的 .env、激活的预设、以及关键项的最终取值（key 只露尾 4 位）。&#x0A;排查「我改的怎么不生效」时先看这里。" />
+            </MenuItem>
+
             <MenuItem Header="视图(_V)"
                       ToolTip="视图菜单（Alt+V）&#x0A;控制左侧文件树、底部面板是否显示。">
                 <MenuItem Header="侧边栏(_P)" IsCheckable="True" IsChecked="True" Click="OnToggleSidebar"
@@ -94,6 +111,25 @@
                 <Separator />
                 <MenuItem x:Name="ThemeMenu" Header="夜间模式(_D)" IsCheckable="True" Click="OnToggleTheme"
                           ToolTip="整窗切换配色：白底黑字 ↔ 黑底白字。&#x0A;运行时立即生效，不需要重启，对话内容与正在生成的回复都不受影响。&#x0A;与工具栏里那个月亮／太阳按钮是同一个开关。&#x0A;选择不写回 .env —— 想默认夜间，就在 .env 里加一行 UI_THEME=dark。" />
+                <Separator />
+                <MenuItem Header="字号(_Z)"
+                          ToolTip="对话正文字号（默认 13）。&#x0A;Ctrl + 加号 / 减号、Ctrl + 滚轮也能调，Ctrl + 0 回默认。&#x0A;改完立刻生效并记住（logs/ui/appearance.json），下次启动沿用。">
+                    <MenuItem Header="放大(_U)" InputGestureText="Ctrl++" Click="OnFontSizeUp"
+                              ToolTip="字号 +1（最大 26）。状态栏会显示当前值。" />
+                    <MenuItem Header="缩小(_D)" InputGestureText="Ctrl+-" Click="OnFontSizeDown"
+                              ToolTip="字号 -1（最小 10）。" />
+                    <MenuItem Header="恢复默认(_R)" Click="OnFontSizeReset"
+                              ToolTip="回到默认 13。" />
+                </MenuItem>
+                <MenuItem Header="段间距(_S)"
+                          ToolTip="相邻两条消息之间的垂直空隙（默认 16）。&#x0A;嫌一屏太挤就加大，想多塞点就减小。&#x0A;只动消息之间的空隙，不改字号。">
+                    <MenuItem Header="加宽(_I)" Click="OnBlockSpacingUp"
+                              ToolTip="段间距 +4 像素（最大 48）。" />
+                    <MenuItem Header="收窄(_T)" Click="OnBlockSpacingDown"
+                              ToolTip="段间距 -4 像素（最小 0）。" />
+                    <MenuItem Header="恢复默认(_F)" Click="OnBlockSpacingReset"
+                              ToolTip="回到默认 16 像素。" />
+                </MenuItem>
             </MenuItem>
 
             <MenuItem Header="帮助(_H)"
@@ -184,6 +220,22 @@
 
                     <Rectangle Style="{StaticResource ToolSep}" />
 
+                    <!-- 子代理：点开左侧列表；首项固定是「主循环（本对话）」 -->
+                    <Button Style="{StaticResource ToolButton}"
+                            x:Name="SubagentButton"
+                            Click="OnToggleSubagents"
+                            ToolTip="子代理&#x0A;蓝色「联系人」图标：左侧换成子代理列表，再点一下换回文件树。&#x0A;列表首项是本对话（主循环），下面是在跑 / 跑完的子代理，带状态点与步数。&#x0A;选中某一项，右侧显示它的全过程：对话页不含思考，过程页显示思考与工具时间线。">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE77B;" FontFamily="{StaticResource IconFont}"
+                                       FontSize="15" Foreground="{DynamicResource IconBlue}" />
+                            <TextBlock x:Name="SubagentBadge" Text="" FontSize="10"
+                                       Margin="3,0,0,0" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource FgMuted}" />
+                        </StackPanel>
+                    </Button>
+
+                    <Rectangle Style="{StaticResource ToolSep}" />
+
                     <!--
                       夜间模式：整窗配色切换（白底黑字 ↔ 黑底白字）。
                       放在工具栏而不是菜单深处 —— 这是个「随手切一下」的开关，藏进菜单就没人会发现。
@@ -235,8 +287,11 @@
                     BorderThickness="0,0,1,0">
                 <Grid>
                     <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />   <!-- 厂里 标题条 -->
+                        <RowDefinition Height="Auto" />   <!-- 库房 小标题 -->
+                        <RowDefinition Height="*" />      <!-- 库房 文件树 -->
+                        <RowDefinition Height="Auto" />   <!-- 车间 小标题 -->
+                        <RowDefinition Height="150" />    <!-- 车间 清单 -->
                     </Grid.RowDefinitions>
 
                     <!-- 面板标题条：CE 每个面板都有这么一条 -->
@@ -245,17 +300,130 @@
                             BorderBrush="{DynamicResource Line}"
                             BorderThickness="0,0,0,1"
                             Padding="8,4"
-                            ToolTip="工作台文件树&#x0A;这里列出的就是模型能看、能改的全部范围（路径沙箱根目录）。&#x0A;单击选中，双击用系统默认程序打开；点左侧三角展开目录。&#x0A;bin、obj、node_modules、venv、.git 等目录被有意隐藏，避免刷屏。">
-                        <TextBlock Text="工作台文件" FontSize="11" FontWeight="SemiBold" />
+                            ToolTip="厂里 = 库房 + 车间&#x0A;库房：模型现在站的那棵树，就是它能看、能改的全部范围（路径沙箱根目录）。&#x0A;车间：临时开工的地方，双击一项把厂里搬过去。&#x0A;bin、obj、node_modules、venv、.git 等目录被有意隐藏，避免刷屏。">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0"
+                                       Text="厂里" FontSize="11" FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                            <Button Grid.Column="1"
+                                    x:Name="SessionReadButton"
+                                    Content="读取记录"
+                                    FontSize="11"
+                                    Padding="6,1"
+                                    Margin="6,0,0,0"
+                                    Click="OnReadSessionMenu"
+                                    ToolTip="读取以往的对话记录&#x0A;列出 logs/sessions 里最近 20 段会话，每段可「原文读入」或「摘要读入」。&#x0A;读进来的内容会进当前上下文，并写进会话记录。" />
+                        </Grid>
+                    </Border>
+
+                    <!-- 库房：永远是「家」（默认作业区）的文件树，不跟着模型跑。
+                         模型跑到哪个车间去了，看下面车间栏的 ▸ 与状态栏。 -->
+                    <Border Grid.Row="1"
+                            Background="{DynamicResource HeaderFace}"
+                            BorderBrush="{DynamicResource Line}"
+                            BorderThickness="0,0,0,1"
+                            Padding="8,3"
+                            ToolTip="库房 —— 你的家（默认作业区）&#x0A;这里永远是家的文件树，不会因为模型进了车间就换掉。&#x0A;模型现在站哪儿：看状态栏，或下面车间栏里带 ▸ 的那一项。&#x0A;双击文件用系统默认程序打开；目录第一次展开才去读。">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="库房" FontSize="11" FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                            <TextBlock Grid.Column="1" x:Name="StorehouseHint" Text="" FontSize="10"
+                                       Margin="8,0,0,0" TextTrimming="CharacterEllipsis"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource FgMuted}" />
+                        </Grid>
                     </Border>
 
                     <TreeView x:Name="FileTree"
-                              Grid.Row="1"
+                              Grid.Row="2"
                               Background="{DynamicResource SurfaceWhite}"
                               BorderThickness="0"
                               Padding="2,4"
                               ScrollViewer.HorizontalScrollBarVisibility="Auto"
                               ToolTip="双击文件＝用系统默认程序打开它。&#x0A;把鼠标停在某个文件上，可看完整路径、大小与修改时间。&#x0A;目录是懒加载的：第一次展开才会去读，避免启动时卡住。" />
+
+                    <!-- 车间：登记簿（<库房根>\_sites.json）里的临时工作台。
+                         双击车间名＝搬进去；点三角展开＝看里面有什么。 -->
+                    <Border Grid.Row="3"
+                            Background="{DynamicResource HeaderFace}"
+                            BorderBrush="{DynamicResource Line}"
+                            BorderThickness="0,1,0,1"
+                            Padding="8,3"
+                            ToolTip="车间 —— 临时开工的地方&#x0A;双击车间名把厂里搬过去（等价 ws_site_enter，会清空读凭证）。&#x0A;＋ 新建：目录建在 &lt;库房&gt;\sites\ 下，建完直接进去。&#x0A;右键：进入 / 在资源管理器打开 / 注销登记（只摘登记，不删文件）。">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="车间" FontSize="11" FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                            <TextBlock Grid.Column="1" x:Name="ShopHint" Text="" FontSize="10"
+                                       Margin="8,0,0,0" TextTrimming="CharacterEllipsis"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource FgMuted}" />
+                            <Button Grid.Column="2"
+                                    x:Name="NewShopButton"
+                                    Content="＋"
+                                    FontSize="11"
+                                    Padding="7,0"
+                                    Margin="6,0,0,0"
+                                    Click="OnNewShopClick"
+                                    ToolTip="新建一个车间&#x0A;名字自己起（留空自动生成），目录建在 &lt;库房&gt;\sites\ 下。&#x0A;建完直接进去，等于 ws_site_new。" />
+                        </Grid>
+                    </Border>
+
+                    <TreeView x:Name="ShopTree"
+                              Grid.Row="4"
+                              Background="{DynamicResource SurfaceWhite}"
+                              BorderThickness="0"
+                              Padding="2,2"
+                              FontSize="11"
+                              ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                              MouseDoubleClick="OnShopTreeDoubleClick"
+                              ToolTip="双击车间名＝搬进去（会清空读凭证）。&#x0A;点左边的三角展开，可以看这个车间里有什么；双击文件用默认程序打开。&#x0A;右键：进入 / 在资源管理器打开 / 注销登记（不删文件）。" />
+                </Grid>
+            </Border>
+
+            <!-- 左：子代理列表（与文件树同一个格子，二选一显示） -->
+            <Border x:Name="SubagentPanel" Grid.Column="0" Visibility="Collapsed"
+                    Background="{DynamicResource SurfaceWhite}"
+                    BorderBrush="{DynamicResource LineStrong}"
+                    BorderThickness="0,0,1,0">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <Border Grid.Row="0"
+                            Background="{DynamicResource HeaderFace}"
+                            BorderBrush="{DynamicResource Line}"
+                            BorderThickness="0,0,0,1"
+                            Padding="8,4"
+                            ToolTip="子代理列表&#x0A;首项固定是「主循环（本对话）」。&#x0A;● 蓝＝在跑、✓ 绿＝完成、⏸ 黄＝被叫停、✕ 红＝失败。&#x0A;点一项在右侧看它的全过程。">
+                        <Grid>
+                            <TextBlock Text="子代理" FontSize="11" FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                            <TextBlock x:Name="SubagentHint" Text="" FontSize="10"
+                                       HorizontalAlignment="Right" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource FgMuted}" />
+                        </Grid>
+                    </Border>
+
+                    <ListBox x:Name="SubagentList" Grid.Row="1"
+                             Style="{StaticResource CeListBox}"
+                             FontSize="11"
+                             SelectionChanged="OnSubagentSelected"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled" />
                 </Grid>
             </Border>
 
@@ -296,13 +464,41 @@
                 </Border>
 
                 <!-- 消息区 -->
-                <ScrollViewer Grid.Row="1"
-                              x:Name="MessageScroll"
+                <!--
+                  ★ 2026-11-04 改：ScrollViewer 从外面搬进 ItemsControl 的模板里。
+
+                  原来写成 <ScrollViewer><ItemsControl><VirtualizingStackPanel/>，
+                  那个 VirtualizingStackPanel 是**假的**：ScrollViewer 在外面，
+                  面板拿到的是「无限高度」约束，WPF 只能把所有条目全部实例化，
+                  虚拟化彻底失效（探针实测 items=66 时 realized=66）。
+
+                  后果不是「稍微慢一点」，而是每追加一个字都要为**整段对话**重新排版：
+                  消息越多越慢，这正是「聊久了越来越卡、一段段往外蹦」的来源。
+
+                  搬进模板后 ScrollViewer 的 Content 就是 ItemsPresenter，
+                  面板成为 IScrollInfo，虚拟化才会真的生效。
+                -->
+                <ItemsControl Grid.Row="1" x:Name="MessageList"
                               Background="{DynamicResource SurfaceWhite}"
-                              VerticalScrollBarVisibility="Auto"
-                              HorizontalScrollBarVisibility="Disabled">
-                    <ItemsControl x:Name="MessageList">
-                        <ItemsControl.ItemsPanel>
+                              VirtualizingPanel.IsVirtualizing="True"
+                              VirtualizingPanel.VirtualizationMode="Standard"
+                              VirtualizingPanel.ScrollUnit="Pixel"
+                              ScrollViewer.CanContentScroll="True"
+                              ScrollViewer.VerticalScrollBarVisibility="Auto"
+                              ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                    <ItemsControl.Template>
+                        <ControlTemplate TargetType="ItemsControl">
+                            <ScrollViewer CanContentScroll="True"
+                                          VerticalScrollBarVisibility="Auto"
+                                          HorizontalScrollBarVisibility="Disabled"
+                                          Background="{DynamicResource SurfaceWhite}"
+                                          Focusable="False">
+                                <ItemsPresenter />
+                            </ScrollViewer>
+                        </ControlTemplate>
+                    </ItemsControl.Template>
+
+                    <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
                                 <!-- 明确定义虚拟化面板：消息变多时只渲染可见区域 -->
                                 <VirtualizingStackPanel />
@@ -328,7 +524,7 @@
                                                 Background="{DynamicResource VoiceAi}"
                                                 ToolTip="左侧色条＝发言者：蓝＝你，橄榄绿＝肥鱼，灰＝系统提示。" />
 
-                                        <StackPanel Grid.Column="1" Margin="11,7,12,9">
+                                        <StackPanel Grid.Column="1" Margin="{Binding DataContext.MessageMargin, RelativeSource={RelativeSource AncestorType=Window}}">
                                             <StackPanel Orientation="Horizontal">
                                                 <TextBlock x:Name="WhoText"
                                                            Text="{Binding NameText}"
@@ -343,13 +539,27 @@
                                                            ToolTip="这条消息的时间（时:分:秒）。&#x0A;流式回复显示的是「开始回复」那一刻，不是结束时间。" />
                                             </StackPanel>
 
-                                            <TextBlock x:Name="BodyText"
-                                                       Text="{Binding Text}"
-                                                       TextWrapping="Wrap"
-                                                       FontSize="13"
-                                                       LineHeight="21"
-                                                       Margin="0,3,0,0"
-                                                       Foreground="{DynamicResource FgPrimary}" />
+                                            <!-- ★2026-11-02 改：TextBlock 不能选中，换成只读 TextBox；外观不变，支持拖选与 Ctrl+C 复制。 -->
+                                            <TextBox x:Name="BodyText"
+                                                     Text="{Binding Text, Mode=OneWay}"
+                                                     IsReadOnly="True"
+                                                     AcceptsReturn="True"
+                                                     TextWrapping="Wrap"
+                                                     IsTabStop="False"
+                                                     BorderThickness="0"
+                                                     Background="Transparent"
+                                                     Padding="0"
+                                                     FontFamily="{StaticResource MonoFont}"
+                                                     FontSize="{Binding DataContext.MessageFontSize, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                     Margin="0,3,0,0"
+                                                     Foreground="{DynamicResource FgPrimary}"
+                                                     VerticalScrollBarVisibility="Hidden"
+                                                     HorizontalScrollBarVisibility="Hidden"
+                                                     FocusVisualStyle="{x:Null}"
+                                                     Cursor="IBeam"
+                                                     Style="{StaticResource CeSelectableText}" ToolTip="可以拖选文字，Ctrl+C 复制选中的片段。"
+                                                      Loaded="OnBodyTextLoaded"
+                                                      Unloaded="OnBodyTextUnloaded" />
                                         </StackPanel>
                                     </Grid>
                                 </Border>
@@ -369,15 +579,14 @@
                                                 Value="{DynamicResource FgMuted}" />
                                         <Setter TargetName="BodyText" Property="FontFamily"
                                                 Value="{StaticResource MonoFont}" />
-                                        <Setter TargetName="BodyText" Property="FontSize" Value="11.5" />
+                                        <!-- 字号统一跟随「视图 → 字号」（MessageFontSize），不再写死 11.5。 -->
                                         <Setter TargetName="BodyText" Property="Foreground"
                                                 Value="{DynamicResource FgMuted}" />
                                     </DataTrigger>
                                 </DataTemplate.Triggers>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                </ScrollViewer>
+                </ItemsControl>
 
                 <!-- 输入区 -->
                 <Border Grid.Row="2"
@@ -434,6 +643,115 @@
                                     Click="OnClearInput"
                                     ToolTip="只清空输入框里的草稿。&#x0A;已经发出去的对话不受影响 —— 想清对话请用工具栏的「清空对话记录」。" />
                         </StackPanel>
+                    </Grid>
+                </Border>
+
+                <!-- 子代理查看器：盖住整个右栏（标题 + 两个页 + 插话） -->
+                <Border x:Name="SubagentViewer" Grid.RowSpan="3" Visibility="Collapsed"
+                        Background="{DynamicResource SurfaceWhite}">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <Border Grid.Row="0"
+                                Background="{DynamicResource HeaderFace}"
+                                BorderBrush="{DynamicResource Line}"
+                                BorderThickness="0,0,0,1"
+                                Padding="8,5">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+
+                                <Button Grid.Column="0" Content="← 回本对话"
+                                        FontSize="11" Padding="6,1" Margin="0,0,8,0"
+                                        Click="OnSubBackClick"
+                                        ToolTip="回到主对话（左侧的子代理列表不动）。" />
+
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock x:Name="SubTitle" Text="" FontSize="11" FontWeight="SemiBold" />
+                                    <TextBlock x:Name="SubMeta" Text="" FontSize="11" Margin="10,0,0,0"
+                                               Foreground="{DynamicResource FgMuted}" />
+                                </StackPanel>
+
+                                <StackPanel Grid.Column="2" Orientation="Horizontal">
+                                    <Button x:Name="TracePopButton" Content="弹出" FontSize="11" Padding="8,1"
+                                            Margin="0,0,6,0"
+                                            Click="OnTracePopClick"
+                                            ToolTip="把「过程」页的真控制台弹成独立窗口：主窗口卡住时它照样滚，也能拖到第二块屏。再点一下收回。" />
+                                    <Button Content="叫停" FontSize="11" Padding="8,1" Margin="0,0,6,0"
+                                            Click="OnSubStopClick"
+                                            ToolTip="软停：它做完当前这一步、把结论落盘再退，最多等一个模型调用（约 90 秒）。&#x0A;按住 Shift 点＝强制结束（taskkill 整棵进程树，半成品可能丢）。" />
+                                    <Button Content="产出" FontSize="11" Padding="8,1"
+                                            Click="OnSubOpenOutput"
+                                            ToolTip="用系统默认程序打开它的成品文件（workspace/subagent/&lt;job&gt;.md）。&#x0A;还没产出时打开所在目录。" />
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+
+                        <TabControl Grid.Row="1">
+                            <TabItem Header="对话"
+                                     ToolTip="对话正文：你的插话、它的回复、工具结果。思考不在这里（去「过程」页）。">
+                                <TextBox x:Name="SubTalkBox" IsReadOnly="True" BorderThickness="0"
+                                         Background="{DynamicResource SurfaceWhite}"
+                                         FontFamily="{StaticResource MonoFont}" FontSize="11"
+                                         TextWrapping="Wrap" AcceptsReturn="True"
+                                         VerticalScrollBarVisibility="Auto"
+                                         HorizontalScrollBarVisibility="Disabled"
+                                         Padding="8" />
+                            </TabItem>
+                            <TabItem Header="过程"
+                                     ToolTip="思考 + 工具时间线：每步思考了什么（模型不返回思考时会注明）、调了哪个工具、参数与返回。">
+                                <!--
+                                  ★ 2026-11-13：「过程」页改成**真控制台**。
+
+                                  原来是一个只读 TextBox，每次刷新都 Text = 全文 —— 富文本控件
+                                  末尾追加一个字也要重排整条消息，子代理跑几十步就越翻越慢。
+
+                                  现在是把一个真 conhost 窗口（独立进程，由 FatFish.exe 的
+                                  loghost 宿主模式拉起）SetParent 到这个 Grid 里：
+                                  写入只改字符格子、滚动只挪视口，成本与已经输出了多少字无关
+                                  —— cmd 那种 0 延迟。
+
+                                  下面的 SubTraceBox 是**降级备胎**：宿主进程起不来
+                                  （被安全软件拦、系统没有 conhost 等）就退回原来的文本框。
+                                  平时它是 Collapsed 的；隐藏不是省事，是必须 ——
+                                  原生窗口（HwndHost）永远画在 WPF 内容之上，留着会盖住控制台。
+                                -->
+                                <Grid x:Name="TraceHost" Background="{DynamicResource SurfaceWhite}">
+                                    <TextBox x:Name="SubTraceBox" IsReadOnly="True" BorderThickness="0"
+                                             Background="{DynamicResource SurfaceWhite}"
+                                             FontFamily="{StaticResource MonoFont}" FontSize="11"
+                                             TextWrapping="Wrap" AcceptsReturn="True"
+                                             VerticalScrollBarVisibility="Auto"
+                                             HorizontalScrollBarVisibility="Disabled"
+                                             Visibility="Collapsed"
+                                             Padding="8" />
+                                </Grid>
+                            </TabItem>
+                        </TabControl>
+
+                        <Border Grid.Row="2" BorderBrush="{DynamicResource Line}" BorderThickness="0,1,0,0"
+                                Padding="8,5">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox x:Name="SubSayBox" Grid.Column="0" FontSize="11"
+                                         MinHeight="24" MaxHeight="60" TextWrapping="Wrap"
+                                         VerticalContentAlignment="Center"
+                                         ToolTip="插一句话给它：在它下一步开头生效（「【主控插话】」），当前这一步不会被打断。&#x0A;要立刻停手点「叫停」。" />
+                                <Button Grid.Column="1" Content="插话" FontSize="11" Padding="10,1"
+                                        Margin="6,0,0,0" Click="OnSubSayClick"
+                                        ToolTip="把这句发给它（下一步生效）。" />
+                            </Grid>
+                        </Border>
                     </Grid>
                 </Border>
             </Grid>

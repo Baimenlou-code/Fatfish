@@ -37,6 +37,11 @@ public sealed record DeepSeekBalance(
 /// <summary>Tavily 用量（含额度池与 key 级两道上限）。</summary>
 /// <param name="Left">实际还能用多少 = min(计划池剩余, key 剩余)。</param>
 /// <param name="LeftPct">计划池剩余百分比。</param>
+/// <param name="Estimated">
+/// true = 官方接口没查通（超时 / 429 / 网络），<paramref name="Left"/> 是按本地台账估算的。
+/// 界面必须把估算值和官方数字区分开 —— 两者长得一模一样时，
+/// 「估算没跟上」会被误读成「额度没动」。
+/// </param>
 public sealed record TavilyUsage(
     bool Ok,
     string Plan,
@@ -50,7 +55,8 @@ public sealed record TavilyUsage(
     int ExtractUsage,
     string KeyMask,
     string? Error,
-    DateTimeOffset Ts);
+    DateTimeOffset Ts,
+    bool Estimated = false);
 
 /// <summary>一次余额查询的完整快照。</summary>
 public sealed record BalanceSnapshot(
@@ -93,14 +99,24 @@ public sealed record BalanceSnapshot(
 ///   key.limit - key.usage            这把 key 还剩多少
 ///   实际可用 = 两者取小。只看计划池会误判成「还有很多」，
 ///   而真正卡住的往往是 key 级上限（团队里别人已经用掉了）。
+///
+/// ★ 2026-11-05 新增「本地兜底计数」：
+///   Tavily 的 /usage 有独立限流、又常被 429/超时挡住，而状态栏要每分钟刷新一次 ——
+///   查不动时不能就把那一格变成「TV ?」，否则每分钟有几十秒是不可读的。
+///   所以失败时用台账估算：剩余 ≈ 上次查到的剩余 − 上次查询之后用掉的 credit。
+///   估算值会带 Estimated 标记，界面据此加「~」，绝不冒充官方数字。
 /// </summary>
 public sealed class BalanceService
 {
     private readonly HttpClient _http;
 
-    public BalanceService(HttpClient? http = null)
+    /// <summary>台账：Tavily 查询不通时用它算「上次查到之后又用掉多少」。</summary>
+    private readonly UsageLedger? _ledger;
+
+    public BalanceService(HttpClient? http = null, UsageLedger? ledger = null)
     {
         _http = http ?? new HttpClient { Timeout = TimeSpan.FromSeconds(12) };
+        _ledger = ledger;
     }
 
     /// <summary>阈值：低于这个数（元）算偏紧。</summary>
@@ -117,12 +133,24 @@ public sealed class BalanceService
 
     public int TimeoutSeconds { get; init; } = (int)ReadDouble("NETBAL_TIMEOUT", 12);
 
+    /// <summary>
+    /// Tavily 的查询超时（秒），默认 10。单独一项，因为它的处置方式和 DeepSeek 不同：
+    /// 超时不算「查询失败」，而是退回本地计数（见 <see cref="Estimate"/>）。
+    /// </summary>
+    public int TavilyTimeoutSeconds { get; init; } = (int)ReadDouble("NETBAL_TAVILY_TIMEOUT", 10);
+
     /// <summary>余额快照的缓存时长（秒）。默认 60，与 Python 版 NETBAL_CACHE_TTL 一致。</summary>
     public int CacheTtlSeconds { get; init; } = (int)ReadDouble("NETBAL_CACHE_TTL", 60);
 
     private static readonly object CacheGate = new();
     private static BalanceSnapshot? _cache;
     private static DateTimeOffset _cacheAt;
+
+    /// <summary>
+    /// 上一次**真实查到**的 Tavily 快照，本地计数的基线。
+    /// 只由真实查询结果写入 —— 估算值再写回来，误差会一轮轮累积。
+    /// </summary>
+    private static TavilyUsage? _lastTavilyOk;
 
     public async Task<BalanceSnapshot> FetchAsync(bool force = false, CancellationToken ct = default)
     {
@@ -145,6 +173,11 @@ public sealed class BalanceService
         var tvTask = FetchTavilyAsync(ct);
 
         await Task.WhenAll(dsTask, tvTask).ConfigureAwait(false);
+
+        // 基线只认「真实查到且没报错」的那一份。估算结果（Estimated=true）不写回，
+        // 否则每失败一次就以上一次的估算为基准再减，误差会滚雪球。
+        if (tvTask.Result.Ok && !tvTask.Result.Estimated)
+            _lastTavilyOk = tvTask.Result;
 
         var snap = new BalanceSnapshot(dsTask.Result, tvTask.Result, DateTimeOffset.UtcNow);
 
@@ -241,7 +274,7 @@ public sealed class BalanceService
 
         try
         {
-            using var doc = await GetJsonAsync("https://api.tavily.com/usage", key!, ct)
+            using var doc = await GetJsonAsync("https://api.tavily.com/usage", key!, ct, TavilyTimeoutSeconds)
                 .ConfigureAwait(false);
 
             var root = doc.RootElement;
@@ -286,13 +319,83 @@ public sealed class BalanceService
         }
         catch (Exception ex)
         {
+            // ★ 查不动了（超时 / 429 / 网络）就退回本地计数，而不是让状态栏变成「TV ?」。
+            //   每分钟刷一次的前提下，「偶发查不到」是常态，不是异常。
             return Fail(ex.Message, mask);
         }
 
-        static TavilyUsage Fail(string error, string mask) => new(
-            Ok: false, Plan: "?", PlanLimit: 0, PlanUsed: 0, KeyLimit: 0, KeyUsed: 0,
-            Left: null, LeftPct: null, SearchUsage: 0, ExtractUsage: 0,
-            KeyMask: mask, Error: error, Ts: DateTimeOffset.UtcNow);
+        // 本地兜底优先；没有基线（从未成功查到过）才真的报失败。
+        TavilyUsage Fail(string error, string mask)
+            => Estimate(error, mask) ?? new TavilyUsage(
+                Ok: false, Plan: "?", PlanLimit: 0, PlanUsed: 0, KeyLimit: 0, KeyUsed: 0,
+                Left: null, LeftPct: null, SearchUsage: 0, ExtractUsage: 0,
+                KeyMask: mask, Error: error, Ts: DateTimeOffset.UtcNow);
+    }
+
+    /// <summary>
+    /// 用「上次真实查到的剩余 − 上次查询之后用掉的 credit」估算 Tavily 余额。
+    /// </summary>
+    /// <remarks>
+    /// 返回 null = 没有基线（这个进程里还没成功查到过一次），此时只能报失败。
+    /// 基线放在静态字段里，所以点击、定时器、工具调用共用同一条时间线。
+    /// </remarks>
+    private TavilyUsage? Estimate(string error, string mask)
+    {
+        var last = _lastTavilyOk;
+
+        if (last?.Left is not { } baseLeft)
+            return null;
+
+        double used;
+
+        try
+        {
+            // 用「打开台账」而不是注入的实例：定时器和工具都可能拿不到同一个实例，
+            // 而台账就是同一个文件，谁打开都读到同一份账。
+            used = (_ledger ?? TryOpenLedger())?.UnitsSince("tavily", last.Ts) ?? 0;
+        }
+        catch (Exception)
+        {
+            used = 0;
+        }
+
+        var left = Math.Max(0, baseLeft - (int)Math.Ceiling(used));
+
+        double? pct = last.PlanLimit > 0
+            ? Math.Round(100.0 * Math.Max(0, left) / last.PlanLimit, 1)
+            : null;
+
+        return last with
+        {
+            Left = left,
+            LeftPct = pct,
+            SearchUsage = last.SearchUsage,
+            KeyMask = mask,
+            Error = error,
+            Estimated = true,
+            Ts = DateTimeOffset.UtcNow,
+        };
+    }
+
+    /// <summary>
+    /// 兜底打开台账。余额查询不该强迫每个调用方都知道台账在哪 ——
+    /// 之前只有 MainWindow 手里有实例，于是定时刷新和 net_balance 工具都拿不到账。
+    /// </summary>
+    private static UsageLedger? TryOpenLedger()
+    {
+        try
+        {
+            var root = Environment.GetEnvironmentVariable("FATFISH_WORKSPACE");
+
+            if (string.IsNullOrWhiteSpace(root))
+                root = System.IO.Directory.GetCurrentDirectory();
+
+            return UsageLedger.Open(root);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
     }
 
     // ------------------------------------------------------------------
@@ -357,7 +460,13 @@ public sealed class BalanceService
         _ => "未知",
     };
 
-    /// <summary>一行摘要（状态栏用）。</summary>
+    /// <summary>一行摘要（状态栏用），形如「DS ¥56.57  TV 880」。</summary>
+    /// <remarks>
+    /// ★ 这里**不标百分比**（2026-11-05 按用户要求去掉）：
+    ///   状态栏只有一格，百分比在「还剩 880 / 1000」这种数字面前几乎没有信息量，
+    ///   却把 DeepSeek 的金额挤得更小。要百分比看 net_balance 的输出。
+    /// ★ 估算值前面加「~」：它是台账推算的，不是官方数字，长得一样会误导。
+    /// </remarks>
     public static string OneLine(BalanceSnapshot s)
     {
         var ds = s.DeepSeek.Ok
@@ -365,7 +474,7 @@ public sealed class BalanceService
             : "DS ?";
 
         var tv = s.Tavily.Ok && s.Tavily.Left is { } left
-            ? $"TV {left} ({s.Tavily.LeftPct:0.#}%)"
+            ? $"TV {(s.Tavily.Estimated ? "~" : string.Empty)}{left}"
             : "TV ?";
 
         return $"{ds}  {tv}";
@@ -373,10 +482,11 @@ public sealed class BalanceService
 
     // ------------------------------------------------------------------
 
-    private async Task<JsonDocument> GetJsonAsync(string url, string key, CancellationToken ct)
+    private async Task<JsonDocument> GetJsonAsync(
+        string url, string key, CancellationToken ct, int? timeoutSeconds = null)
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(TimeSpan.FromSeconds(Math.Max(3, TimeoutSeconds)));
+        cts.CancelAfter(TimeSpan.FromSeconds(Math.Max(3, timeoutSeconds ?? TimeoutSeconds)));
 
         using var req = new HttpRequestMessage(HttpMethod.Get, url);
 
@@ -440,6 +550,7 @@ public sealed class BalanceService
         foreach (var n in names)
         {
             var v = Environment.GetEnvironmentVariable(n);
+
             if (!string.IsNullOrWhiteSpace(v))
                 return v.Trim();
         }

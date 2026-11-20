@@ -67,6 +67,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged, IAgentObserver
     private ToolRegistry? _registry;
     private PathGuard? _guard;
     private WorkspaceSession? _workspaceSession;
+
+    /// <summary>
+    /// 车间登记簿（库房 + 若干临时车间）。左栏「车间」清单与五个 ws_site_* 工具共用这一份，
+    /// 所以必须挂在字段上，不能只在 BootKernel 里当局部变量用。
+    /// </summary>
+    private WorkspaceSites? _sites;
     private ToolContext? _context;
     private ApprovalPolicy? _policy;
     private DeepSeekClient? _llm;
@@ -87,6 +93,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged, IAgentObserver
     private UserEventLog? _userEvents;
 
     /// <summary>
+    /// 联网用量台账。热重载会重建 NetService，但台账必须复用 ——
+    /// 换一个实例等于把本进程已花的钱从账上抹掉，而它正是用来对账的。
+    /// </summary>
+    private UsageLedger? _ledger;
+
+    /// <summary>
     /// 会话落盘。为 null 表示落盘不可用 —— 只影响「能否恢复上次对话」，不影响当前对话。
     /// </summary>
     private SessionStore? _session;
@@ -100,6 +112,32 @@ public partial class MainWindow : Window, INotifyPropertyChanged, IAgentObserver
     /// </summary>
     private volatile string? _streamId;
 
+    // ------------------------------------------------------------------
+    // 流式增量：即时落地，不再「攒着按节拍放」
+    //
+    // 2026-11-04 重写。上一版为了掩盖「每写一次控件都要整段重排」的成本，
+    // 加了打字机节拍（16ms 一帧、每帧最多 24 字、积压多时封顶 200ms）——
+    // 那是拿延迟去粉饰成本，方向错了：要的是「字到了就出现」，不是「匀速但更慢」。
+    //
+    // 现在只有一条规则：**有分片就立刻画**。
+    //   · 同一批事件（UiDispatcher 一次批量出队）里的分片先拼成一段，只写一次控件；
+    //   · 写控件走 TextBox.AppendText（增量追加）而不是 Text=全文（整段重建）；
+    //   · 让每次追加真正变便宜的，是 MessageList 打开了虚拟化
+    //     （见 MainWindow.xaml 里那段 ★ 注释）——否则每追加一个字都要为整段对话重排。
+    // ------------------------------------------------------------------
+    private readonly System.Text.StringBuilder _pendingDelta = new();
+
+    private string? _pendingDeltaId;
+
+    /// <summary>已经排了一次「立刻画」，不重复排队（同一批分片因此合并成一次）。</summary>
+    private bool _flushQueued;
+
+    /// <summary>消息 id → 正文 TextBox。流式时直接写控件，绕开绑定与整段重建。</summary>
+    private readonly Dictionary<string, TextBox> _bodyBoxes = new();
+
+    private ScrollViewer? _msgScroller;
+
+
     private int _streamSeq;
 
     private string _workspaceText = "未加载";
@@ -111,6 +149,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged, IAgentObserver
     private string _usageText = "—";
     private string _messageCountText = "无记录";
     private string _balanceText = "余额 —";
+
+    /// <summary>阅读外观（正文字号 / 段间距）。改动即落盘，见 AppearanceStore。</summary>
+    private AppearanceSettings _appearance = AppearanceSettings.Default;
     private bool _isRunning;
 
     public MainWindow()
@@ -124,11 +165,22 @@ public partial class MainWindow : Window, INotifyPropertyChanged, IAgentObserver
         DataContext = this;
 
         FileTree.MouseDoubleClick += OnTreeDoubleClick;
+
+        // Ctrl + 滚轮 = 调字号（大多数人第一次尝试的调法就是它）
+        MessageList.PreviewMouseWheel += OnMessageScrollWheel;   // ScrollViewer 现在在 ItemsControl 模板里
+
+        // 字号快捷键单独挂一个处理器：OnWindowKeyDown 已经负责 Ctrl+N，
+        // 再往里塞字号判断会让那个方法变成「什么都干」。
+        PreviewKeyDown += OnAppearanceKeyDown;
+        AttachFileReadMenu();
         PreviewKeyDown += OnWindowKeyDown;
 
         Loaded += OnLoaded;
         Closing += OnClosing;
         Closed += OnClosed;
+
+        // 流式渲染探针：只在 FATFISH_STREAM_PROBE=1 时启用，平时一行都不执行
+        StreamProbe.Attach(this);
     }
 
     // ---------- 绑定属性 ----------
@@ -196,6 +248,21 @@ public partial class MainWindow : Window, INotifyPropertyChanged, IAgentObserver
         private set => SetField(ref _balanceText, value);
     }
 
+    /// <summary>消息正文字号。模板里 BodyText 的 FontSize 绑这个。</summary>
+    public double MessageFontSize => _appearance.FontSize;
+
+    /// <summary>消息外边距：上下各占段间距的一半，左右沿用原来的 11 / 12。</summary>
+    /// <remarks>
+    /// 为什么上下平分：段间距的直觉是「两条消息之间的空隙」。
+    /// 若全给上边或下边，最后一条消息底下就会多出一截空白，
+    /// 滚到底时看起来像内容被截断。
+    /// </remarks>
+    public Thickness MessageMargin => new(
+        11,
+        Math.Round(_appearance.BlockSpacing / 2),
+        12,
+        Math.Round(_appearance.BlockSpacing / 2));
+
     // ---------- 生命周期 ----------
 
     private void OnLoaded(object sender, RoutedEventArgs e)
@@ -205,6 +272,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged, IAgentObserver
         // 窗口位置要在装配内核之前恢复：这是纯 UI 的事，
         // 而且万一内核装配失败，用户至少还能看到一个位置正常的窗口。
         RestoreWindowPlacement();
+
+        // 外观和窗口位置一样，要在内核装配之前恢复：万一后面初始化失败，
+        // 用户至少还能用自己习惯的字号去看那条错误信息。
+        LoadAppearance();
 
         try
         {
@@ -246,6 +317,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged, IAgentObserver
 
         // 余额异步刷新：它要发两次 HTTP 请求，绝不能挡在启动路径上。
         _ = RefreshBalanceAsync();
+
+        // 之后每 60 秒刷一次（实现在 MainWindow.Balance.cs）。
+        // 只靠「启动一次 + 点击才查」的话，聊一晚上那格数字都不会动。
+        StartBalanceTimer();
     }
 
     // ---------- 窗口位置 ----------
@@ -392,6 +467,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged, IAgentObserver
         // 把还在跑的后台任务一并掐掉，否则关掉窗口后它们会变成孤儿进程继续占 CPU
         _jobs?.Dispose();
 
+        // 「过程」页的真控制台是独立进程：收掉它，别在后台留一个看不见的 cmd
+        ShutdownTraceConsole();
+
         if (_ui is not null)
             await _ui.DisposeAsync();
     }
@@ -440,16 +518,26 @@ public partial class MainWindow : Window, INotifyPropertyChanged, IAgentObserver
         //   症状是 web_search / web_fetch 一直回「没有配置任何搜索后端」，
         //   而 .env 里 TAVILY_API_KEY / FATFISH_API_KEY 明明齐全。
         //   BootAgent 复用这里的结果，不再重复载入。
-        var (envPath, envCount) = EnvFile.LoadNearest(_guard.Root);
+        // ★ 2026-11-17 修：这里原来是 EnvFile.LoadNearest —— 它只读 .env、不看 FATFISH_PRESET，
+        //   于是每次启动都退回 .env 的裸值，用户必须手动点「配置 ▸ 预设」才切回来（用户报的原话：
+        //   「每次启动不读取预设配置，每次都要手动切预设」）。启动与热重载必须同一套语义。
+        var startup = EnvRuntime.ApplyStartup(_guard.Root);
 
-        Log("配置 " + (envPath ?? "（未找到 .env）")
-            + (envPath is null ? string.Empty : $"（{envCount} 项）"));
+        foreach (var warning in startup.Warnings)
+            Log("[配置] ⚠ " + warning);
+
+        // 一行说清「这次到底按哪套配置跑」：文件 + 叠了哪个预设 + 装进去几项。
+        Log("[配置] " + (startup.EnvPath ?? "（未找到 .env）")
+            + (startup.PresetName is null ? string.Empty : "｜预设：" + startup.PresetName)
+            + (startup.EnvPath is null ? string.Empty : $"｜装载 {startup.AppliedCount} 项"));
 
         var netOptions = NetOptions.FromEnvironment();
 
         // 「到底认了哪几家后端」写进日志（key 只露尾 4 位）。
         // 没有这一行时，「配置写了却没生效」只能靠猜。
         Log("[联网] " + netOptions.Describe());
+
+        _ledger = ledger;
 
         _net = new NetService(netOptions, ledger);
 
@@ -470,6 +558,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged, IAgentObserver
             new WsForgetTool(),
             new WsCdTool(),
             new WsCdApproveTool(),
+            new WsSiteNewTool(),
+            new WsSiteListTool(),
+            new WsSiteEnterTool(),
+            new WsSiteHomeTool(),
+            new WsSiteDropTool(),
             new WsRunCmdTool(),
             new WsRunPythonTool(),
             new WsBgCmdTool(),
@@ -499,6 +592,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged, IAgentObserver
                 Path.GetFullPath(pluginDirOverride.Trim()), BuiltIn: false));
         }
 
+        // 发布版（单文件 exe 就放在工作台根）会让 BaseDirectory 与工作台根重合，
+        // 同一份 plugins 被扫两遍：工具不会重复注册（按 id 覆盖），但日志会多一条
+        // 「已被覆盖」、filesFound 翻倍，排查时白费眼力。这里按路径去重。
+        var seenDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        pluginDirs = pluginDirs.Where(d => seenDirs.Add(Path.GetFullPath(d.Path))).ToList();
+
         _plugins = PluginHost.Start(
             new PluginHostOptions
             {
@@ -509,6 +608,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged, IAgentObserver
 
         _policy = new ApprovalPolicy(_workspaceSession) { Plugins = _plugins };
 
+        // 车间登记簿（旧称「工地」）：库房 + 若干临时车间，落盘在 <库房根>\_sites.json。
+        // 必须在 ToolContext 之前建好 —— 五个 ws_site_* 工具和左栏「车间」清单都靠它认名字。
+        var sites = new WorkspaceSites(_workspaceSession);
+
+        _sites = sites;   // 左栏要读它，所以挂到字段上（局部变量活不到 LoadShops）
+
         _context = new ToolContext
         {
             // Guard / Tickets 是「初始绑定」；Workspace 会让它们跟着会话走，
@@ -516,6 +621,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged, IAgentObserver
             Guard = _guard,
             Tickets = tickets,
             Workspace = _workspaceSession,
+            Sites = sites,
             Approval = _policy,
             Jobs = _jobs,
             Net = _net,
@@ -525,10 +631,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged, IAgentObserver
 
         _registry = new ToolRegistry(builtin, _plugins);
 
-        WorkspaceText = "工作台：" + _guard.Root;
+        WorkspaceText = "厂里：" + _guard.Root;
         ToolCountText = "工具 " + _registry.Count + " 个";
 
-        Log("工作台根目录 " + _guard.Root);
+        Log("厂里根目录（库房）" + _guard.Root);
         Log("插件 " + _plugins.Describe());
 
         // 直接从注册表取名，不再手写一份清单：
@@ -536,7 +642,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged, IAgentObserver
         Log("已注册工具：" + string.Join(
             ", ", _registry.All.Select(t => t.Name).OrderBy(n => n, StringComparer.Ordinal)));
 
-        LoadTree(_guard.Root);
+        // 库房 = 家（默认作业区）。它不跟着换根跑：模型进了车间，库房照样显示家里的文件。
+        LoadTree(_workspaceSession.DefaultRoot);
+        LoadShops();      // 左栏「车间」栏
+
+        // 预设菜单要在启动时就建好：否则第一次打开「配置 ▸ 预设」是空白的，
+        // 用户会以为功能没生效（而它只是还没被触发）。
+        RebuildPresetMenu();
     }
 
     /// <summary>装配 LLM 与编排层。返回是否成功（缺 key 时返回 false 而不是抛异常）。</summary>
@@ -545,7 +657,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged, IAgentObserver
         if (_guard is null || _registry is null || _context is null || _policy is null)
             return false;
 
-        var (envPath, loaded) = EnvFile.LoadNearest(_guard.Root);
+        // 配置在 BootKernel 里已经装好了（.env + 激活的预设，见 EnvRuntime.ApplyStartup）。
+        // 这里不再 Load 一次：Load 是「已存在不覆盖」且按文件去重，再调只会空转 ——
+        // 却仍返回「解析到 N 项」，让日志说一句「载入 N 项」而实际一项没变。
+        var envPath = EnvFile.ResolvePath(_guard.Root);
 
         // 与 Python 版同序：FATFISH_API_KEY 优先，DEEPSEEK_API_KEY 作为旧写法兼容。
         // 用 TryResolveApiKey 而不是自己 EnvFile.Get 某个键：
@@ -586,8 +701,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged, IAgentObserver
 
         AttachSession();
 
-        if (loaded > 0)
-            AppendMessage("system", $"已从 {Path.GetFileName(envPath)} 载入 {loaded} 项配置。");
+        // 启动消息里点名激活的预设：「到底按哪套配置跑的」不该靠点菜单去猜。
+        if (EnvRuntime.ActivePresetName(_guard.Root) is { } activePreset)
+            AppendMessage("system",
+                "启动配置：预设「" + activePreset + "」"
+                + (envPath is null ? string.Empty : "（" + Path.GetFileName(envPath) + "）"));
 
         ModelText = options.Model;
 
@@ -768,6 +886,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged, IAgentObserver
                 break;
 
             case UiEvent.StreamBegin e:
+                FlushStreamDelta();                 // 上一段没画完的一次性落地，再开新气泡
                 _messages.Add(new MessageItem(e.StreamId, string.Empty, "ai"));
                 UpdateMessageCount();
                 ScrollToBottom();
@@ -775,19 +894,34 @@ public partial class MainWindow : Window, INotifyPropertyChanged, IAgentObserver
 
             case UiEvent.StreamDelta e:
                 {
-                    var target = FindMessage(e.StreamId);
-                    if (target is not null)
-                    {
-                        // 用 StringBuilder 累积再赋值，避免每次 string += 产生 O(n²) 拷贝
-                        target.AppendText(e.Text);
-                        ScrollToBottom();
-                    }
+                    // 只入缓冲 + 排一次「立刻画」：同一批分片会在这里合并成一段
+                    _pendingDelta.Append(e.Text);
+                    _pendingDeltaId = e.StreamId;
+                    StreamProbe.NoteDelta(e.Text.Length);
+                    QueueFlush();
 
                     break;
                 }
 
             case UiEvent.StreamEnd:
+                // 网络侧收完：把缓冲里剩下的（通常只有几个字）一次画掉
+                FlushStreamDelta();
                 ScrollToBottom();
+
+                if (StreamProbe.On)
+                {
+                    var probeTimer = new System.Windows.Threading.DispatcherTimer
+                    {
+                        Interval = TimeSpan.FromSeconds(1.5),
+                    };
+                    probeTimer.Tick += (_, _) =>
+                    {
+                        probeTimer.Stop();
+                        StreamProbe.Report("stream-end");
+                    };
+                    probeTimer.Start();
+                }
+
                 break;
 
             case UiEvent.SetStatus e:
@@ -796,18 +930,19 @@ public partial class MainWindow : Window, INotifyPropertyChanged, IAgentObserver
 
             case UiEvent.WorkspaceChanged e:
                 {
-                    // 根变了：状态栏、文件树、_guard 全部跟着换。
+                    // 根变了：状态栏、_guard 跟着换；**库房那棵树不换**（它永远是家），
+                    // 只刷新车间栏的 ▸ 与「现在在哪」。
                     // _guard 在「打开文件夹 / 加载 .env / 会话落盘目录」等处还被用到，
                     // 在这里统一重指，比让每处都改成 _workspaceSession.Guard 更不容易漏。
                     _guard = _workspaceSession?.Guard ?? _guard;
 
-                    WorkspaceText = "工作台：" + e.NewRoot;
-                    LoadTree(e.NewRoot);
+                    WorkspaceText = "厂里：" + e.NewRoot;
+                    LoadShops();      // ▸ 标记换人了；库房树故意不动
 
                     AppendMessage("system",
-                        $"📁 工作台已切换：{e.OldRoot} → {e.NewRoot}（读凭证已清空）");
+                        $"🏭 厂里已搬家：{e.OldRoot} → {e.NewRoot}（读凭证已清空）");
 
-                    StatusText = "工作台已切换";
+                    StatusText = "厂里已搬家";
                     break;
                 }
 
@@ -822,16 +957,50 @@ public partial class MainWindow : Window, INotifyPropertyChanged, IAgentObserver
         }
     }
 
+    /// <summary>还挂着的审批窗（非模态，并行工具调用时可能不止一个）。</summary>
+    private readonly List<ApprovalWindow> _approvals = new();
+
     private void ShowApprovalDialog(UiEvent.ApprovalRequested e)
     {
         try
         {
+            // ★ 非模态（Show 而不是 ShowDialog）。
+            //   模态的问题不是「要你确认」，而是**整个程序被它冻住**：窗口在等你看，
+            //   你却在等窗口结束 —— 连「停止本回合」和滚动聊天都点不了。
+            //   现在它只是浮在上面，结果通过 Decided 事件回话。
             var dlg = new ApprovalWindow(e.Request) { Owner = this };
-            var ok = dlg.ShowDialog();
 
-            e.Decision.TrySetResult(new ApprovalDecision(
-                Approved: ok == true && dlg.Approved,
-                AllowForSession: dlg.AllowForSession));
+            var settled = false;
+
+            void Settle(bool approved, bool allowForSession)
+            {
+                if (settled)
+                    return;
+
+                settled = true;
+                _approvals.Remove(dlg);
+                e.Decision.TrySetResult(new ApprovalDecision(approved, allowForSession));
+
+                if (dlg.IsVisible)
+                    dlg.Close();
+            }
+
+            dlg.Decided += (approved, allowForSession) => Settle(approved, allowForSession);
+
+            // 直接关窗 = 拒绝（以前模态下关窗 ShowDialog 返回 null，也走拒绝，行为一致）
+            dlg.Closed += (_, _) => Settle(false, false);
+
+            // 回合被取消（Esc / 停止，或内核自己放弃）时把这张单子也了结掉。
+            // 修的就是这个老毛病：模态下内核已经不等了，窗口还杵在那儿要你点。
+            if (e.Cancel.CanBeCanceled)
+            {
+                e.Cancel.Register(() => Dispatcher.BeginInvoke(
+                    new Action(() => Settle(false, false))));
+            }
+
+            _approvals.Add(dlg);
+            dlg.Show();
+            dlg.Activate();
         }
         catch (Exception ex)
         {
@@ -861,21 +1030,202 @@ public partial class MainWindow : Window, INotifyPropertyChanged, IAgentObserver
 
     private bool _scrollQueued;
 
+    /// <summary>
+    /// 是否要「跟随到底」：新内容出现时自动滚到最新一行。
+    /// </summary>
+    /// <remarks>
+    /// ★ 这个标志只能由「用户主动滚动」改变（见 OnMessageScrollChanged）。
+    ///   绝不能在每条分片里现算「离底部多远」—— 流式追加本身就把
+    ///   ScrollableHeight 一路推高，现算的结果永远是「用户已经离开了」，
+    ///   于是跟随会在输出两三行之后悄悄失效。
+    /// </remarks>
+    private bool _stickToBottom = true;
+
+    /// <summary>ScrollChanged 只订阅一次。</summary>
+    private bool _scrollHooked;
+
+    /// <summary>消息列表自带的 ScrollViewer（在 ItemsControl 的模板里，只能从视觉树取）。</summary>
+    private ScrollViewer? MessageScroller
+    {
+        get
+        {
+            if (_msgScroller is not null)
+                return _msgScroller;
+
+            _msgScroller = FindDescendant<ScrollViewer>(MessageList);
+
+            // 模板里的 ScrollViewer 要等布局完成才存在，所以订阅放在取用处，不能放构造函数。
+            if (_msgScroller is not null && !_scrollHooked)
+            {
+                _scrollHooked = true;
+                _msgScroller.ScrollChanged += OnMessageScrollChanged;
+            }
+
+            return _msgScroller;
+        }
+    }
+
+    /// <summary>
+    /// 排一次「立刻画」。
+    /// </summary>
+    /// <remarks>
+    /// 这是**唯一**的合并手段：没有定时器、没有节拍、没有每帧字数上限。
+    /// 一批分片只会排到一次，剩下的延迟就是「这个回调什么时候被调度到」，
+    /// 量级在 1ms 以内 —— 属于看不出来的部分，不是人为加的。
+    /// </remarks>
+    private void QueueFlush()
+    {
+        if (_flushQueued)
+            return;
+
+        _flushQueued = true;
+
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            _flushQueued = false;
+            FlushStreamDelta();
+        }), System.Windows.Threading.DispatcherPriority.Render);
+    }
+
+    /// <summary>把缓冲里的字全部写进气泡。不切分、不限速。</summary>
+    private void FlushStreamDelta()
+    {
+        if (_pendingDelta.Length == 0)
+            return;
+
+        var chunk = _pendingDelta.ToString();
+        _pendingDelta.Clear();
+
+        var id = _pendingDeltaId;
+        var sw = StreamProbe.On ? Stopwatch.StartNew() : null;
+
+        if (id is not null)
+        {
+            // 1) 数据层始终同步：会话落盘、虚拟化回收后重新实例化，都要拿到完整正文
+            FindMessage(id)?.AppendSilent(chunk);
+
+            // 2) 控件层增量追加：AppendText 不会把已有文字丢掉重建
+            if (_bodyBoxes.TryGetValue(id, out var box))
+            {
+                try
+                {
+                    box.AppendText(chunk);
+                }
+                catch (InvalidOperationException)
+                {
+                    // 气泡刚好被移除：下次 Loaded 时会从 Text 绑定补全
+                }
+            }
+        }
+
+        if (sw is not null)
+            StreamProbe.NoteFlush(chunk.Length, sw.Elapsed.TotalMilliseconds);
+
+        ScrollToBottom();
+    }
+
+    // ---------- 正文 TextBox 的登记（流式时直接写控件） ----------
+
+    private void OnBodyTextLoaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is not TextBox box || box.DataContext is not MessageItem item)
+            return;
+
+        _bodyBoxes[item.Id] = box;
+
+        // 正在流式的那条刚被实例化（虚拟化回收、或用户滚回来）：把已收到的内容补上
+        if (item.Id == _pendingDeltaId && box.Text.Length != item.Text.Length)
+            box.Text = item.Text;
+    }
+
+    private void OnBodyTextUnloaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is not TextBox box || box.DataContext is not MessageItem item)
+            return;
+
+        if (_bodyBoxes.TryGetValue(item.Id, out var current) && ReferenceEquals(current, box))
+            _bodyBoxes.Remove(item.Id);
+    }
+
+    private static T? FindDescendant<T>(DependencyObject root) where T : DependencyObject
+    {
+        var count = VisualTreeHelper.GetChildrenCount(root);
+
+        for (var i = 0; i < count; i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+
+            if (child is T hit)
+                return hit;
+
+            var deeper = FindDescendant<T>(child);
+            if (deeper is not null)
+                return deeper;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// 把视图滚到最新一行 —— 只在新内容把底部推出视野、且用户没有主动上翻时做。
+    /// </summary>
+    /// <remarks>
+    /// ★ 2026-11-04 修：「跟随」曾经在这里丢掉过，原因记下来以免重犯。
+    ///   旧写法在滚动回调里现算「离底部是否 &lt; 48px」，可流式追加本身就一直把
+    ///   ScrollableHeight 推高，两三行之后这个差必然超过 48，于是被判成
+    ///   「用户往上翻了」—— 从此不再跟随，而且不报错、不打日志。
+    ///   现在判断交给 OnMessageScrollChanged（只认用户主动滚动），这里只管照办。
+    /// </remarks>
     private void ScrollToBottom()
     {
-        // 流式输出时每秒可能触发上百次，用标志位合并成一次滚动请求
+        if (!_stickToBottom)
+            return;
+
+        // 流式时每秒可能触发上百次，用标志位合并成一次滚动请求
         if (_scrollQueued)
             return;
 
         _scrollQueued = true;
 
+        // 优先级从 Background 提到 Render：Background 排在输入与渲染之后，
+        // 流式密集时会被后续刷新一路挤掉，表现为「滚得一顿一顿」。
         Dispatcher.BeginInvoke(
             new Action(() =>
             {
                 _scrollQueued = false;
-                MessageScroll.ScrollToEnd();
+
+                var scroller = MessageScroller;
+                if (scroller is null || !_stickToBottom)
+                    return;
+
+                scroller.ScrollToEnd();
             }),
-            System.Windows.Threading.DispatcherPriority.Background);
+            System.Windows.Threading.DispatcherPriority.Render);
+    }
+
+    /// <summary>
+    /// 只在「用户主动滚动」时更新跟随意图。
+    /// </summary>
+    /// <remarks>
+    /// ★ 必须区分两种滚动：用户拖的（VerticalChange ≠ 0）和内容长高导致的
+    ///   （只有 ExtentHeightChange）。后者若也参与判断，流式输出会把自己判成
+    ///   「用户已经离开底部」，跟随就此永久失效 —— 那正是上一版的毛病。
+    /// </remarks>
+    private void OnMessageScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        if (e.ExtentHeightChange != 0 && Math.Abs(e.VerticalChange) < 0.5)
+        {
+            // ★ 2026-11-06 补：长高后补一次贴底（与 ScrollTail.OnScrollChanged 同一处理）。
+            //   正文 TextBox 异步加载、换行重算、虚拟化重估 extent 都会把底部推下去，
+            //   而那时已经没有「追加消息」这个动作了 —— 没人补滚，视图就停在半路，
+            //   表现为「明明没碰滚轮，却得自己往下拖」。
+            if (_stickToBottom && e.ExtentHeightChange > 0)
+                ScrollToBottom();
+
+            return;
+        }
+
+        _stickToBottom = e.ExtentHeight - e.VerticalOffset - e.ViewportHeight < 48;
     }
 
     // ---------- 输入区 ----------
@@ -977,6 +1327,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged, IAgentObserver
             _pendingTools[toolName] = item;
             _toolLog.Add(item);
             UpdateToolCount();
+            FollowTool();
         });
 
         _ui?.Post(new UiEvent.SetStatus($"调用工具 {toolName}…"));
@@ -1022,7 +1373,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged, IAgentObserver
         var tcs = new TaskCompletionSource<ApprovalDecision>(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
-        _ui.Post(new UiEvent.ApprovalRequested(request, tcs));
+        _ui.Post(new UiEvent.ApprovalRequested(request, tcs, ct));
 
         using var reg = ct.Register(() => tcs.TrySetCanceled(ct));
 
@@ -1064,6 +1415,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged, IAgentObserver
         // 只留最近 400 行：日志是排障用的，不需要无限堆积
         while (_logs.Count > 400)
             _logs.RemoveAt(0);
+
+        // ★ 必须放在截断之后：RemoveAt(0) 会把视口位置整体上移，
+        //   先贴底会被它冲掉，表现为「日志刚滚到底又弹回去」。
+        FollowLog();
     }
 
     /// <summary>在 UI 线程执行；已在 UI 线程则直接跑。</summary>
@@ -1134,9 +1489,343 @@ public partial class MainWindow : Window, INotifyPropertyChanged, IAgentObserver
     /// </summary>
     private static bool IsIgnoredDir(string name) => WorkspaceFilters.IgnoredDirs.Contains(name);
 
+    /// <summary>车间树节点 → 对应的登记项（节点 Tag 留给路径，展开时才用得上）。</summary>
+    private readonly Dictionary<TreeViewItem, WsSite> _shopNodes = new();
+
+    /// <summary>去掉末尾分隔符，用于比较两个路径是不是同一处。</summary>
+    private static string TrimSep(string path) =>
+        path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+    /// <summary>
+    /// 刷新左栏「车间」栏：每个车间自己是一棵树，展开才去读它的目录。
+    ///
+    /// ★ 节点 Tag 保持「路径」不动，因为 <see cref="OnTreeNodeExpanded"/> 靠它枚举子目录；
+    ///   「这个节点代表哪个车间」另存 <see cref="_shopNodes"/> ——
+    ///   展开、双击、右键三条路径各取所需，谁也不去改别人的 Tag。
+    ///
+    /// ★ 本方法只读登记簿 + 贴标签，不改任何状态；搬家在 <see cref="EnterShop"/>。
+    /// </summary>
+    private void LoadShops()
+    {
+        ShopTree.Items.Clear();
+        _shopNodes.Clear();
+
+        IReadOnlyList<WsSite> all = _sites?.All ?? Array.Empty<WsSite>();
+
+        var current = TrimSep(_workspaceSession?.Root ?? _guard?.Root ?? string.Empty);
+        var hereSite = all.FirstOrDefault(s =>
+            string.Equals(TrimSep(s.Path), current, StringComparison.OrdinalIgnoreCase));
+
+        if (all.Count == 0)
+        {
+            ShopHint.Text = "0 处 ｜ 点 ＋ 新建";
+            return;
+        }
+
+        foreach (var site in all)
+        {
+            var here = string.Equals(TrimSep(site.Path), current, StringComparison.OrdinalIgnoreCase);
+            var missing = Directory.Exists(site.Path) ? string.Empty : "（目录已不在）";
+
+            var label = (here ? "▸ " : string.Empty) + site.Name
+                        + (string.IsNullOrWhiteSpace(site.Note) ? string.Empty : " ｜ " + site.Note)
+                        + missing;
+
+            // MakeNode 会塞一个 null 占位、并挂上「第一次展开才枚举」的处理器
+            var node = MakeNode(site.Path, isDir: true, label: label);
+
+            node.FontWeight = here ? FontWeights.SemiBold : FontWeights.Normal;
+
+            if (missing.Length > 0)
+                node.Foreground = (Brush)FindResource("FgMuted");
+
+            node.ToolTip = site.Path
+                           + (string.IsNullOrWhiteSpace(site.Note) ? string.Empty : "\n" + site.Note)
+                           + "\n建于 " + site.CreatedAt.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)
+                           + "\n双击＝搬进这个车间（会清空读凭证）"
+                           + "\n右键＝进入 / 在资源管理器打开 / 注销登记";
+
+            node.ContextMenu = BuildShopMenu(site);
+
+            _shopNodes[node] = site;
+            ShopTree.Items.Add(node);
+        }
+
+        ShopHint.Text = hereSite is null
+            ? $"{all.Count} 处 ｜ 现在在家"
+            : $"{all.Count} 处 ｜ 在车间「{hereSite.Name}」";
+    }
+
+    /// <summary>
+    /// 车间项右键菜单：进入 / 在资源管理器打开 / 注销登记。
+    ///
+    /// ★ 第三项写的是「注销登记」不是「删除」：它与 ws_site_drop 同一条规矩 ——
+    ///   只摘登记，不碰文件。真要删目录请走 ws_delete（那才有读全检查、备份与审批）。
+    /// </summary>
+    private ContextMenu BuildShopMenu(WsSite site)
+    {
+        var menu = new ContextMenu();
+
+        var enter = new MenuItem { Header = "进这个车间" };
+        enter.Click += (_, _) => EnterShop(site);
+
+        var reveal = new MenuItem { Header = "在资源管理器里打开" };
+        reveal.Click += (_, _) => RevealInExplorer(site.Path);
+
+        var drop = new MenuItem { Header = "注销登记（不删文件）" };
+        drop.Click += (_, _) => DropShop(site);
+
+        menu.Items.Add(enter);
+        menu.Items.Add(reveal);
+        menu.Items.Add(new Separator());
+        menu.Items.Add(drop);
+
+        return menu;
+    }
+
+    /// <summary>
+    /// 把厂里搬到某个车间。
+    ///
+    /// ★ 为什么这里可以紧接着调 ApprovePending：点这一下的人就是用户本人。
+    ///   模型调用时之所以要两步（ws_cd → ws_cd_approve），防的是「模型自己替用户点头」；
+    ///   而这里是用户亲手点的。但**出了默认作业区仍然要先弹确认** ——
+    ///   那条线不能因为入口从工具变成鼠标就消失。
+    /// </summary>
+    private void EnterShop(WsSite site)
+    {
+        var session = _workspaceSession;
+        if (session is null)
+            return;
+
+        if (!Directory.Exists(site.Path))
+        {
+            MessageBox.Show(this,
+                $"这个车间的地已经不在了：\n{site.Path}\n\n" +
+                "可以让肥鱼用 ws_site_drop 把这条失效登记清掉。",
+                "车间", MessageBoxButton.OK, MessageBoxImage.Warning);
+
+            LoadShops();
+            return;
+        }
+
+        var result = session.ChangeTo(site.Path);
+
+        if (result.NeedsApproval)
+        {
+            var answer = MessageBox.Show(this,
+                $"要把厂里搬到「{site.Name}」吗？\n\n目标：{site.Path}\n" +
+                $"它在默认作业区（{session.DefaultRoot}）之外，所以要你亲口确认。\n\n" +
+                "搬家会清空所有读凭证。",
+                "确认搬家", MessageBoxButton.OKCancel, MessageBoxImage.Question);
+
+            if (answer != MessageBoxResult.OK)
+                return;
+
+            result = session.ApprovePending();
+        }
+
+        if (!result.Ok)
+        {
+            MessageBox.Show(this, result.Message, "车间", MessageBoxButton.OK, MessageBoxImage.Warning);
+            LoadShops();
+            return;
+        }
+
+        AppendMessage("system", $"🏭 进车间：「{site.Name}」{site.Path}（读凭证已清空）");
+    }
+
+    /// <summary>在资源管理器里定位到车间目录。</summary>
+    private void RevealInExplorer(string path)
+    {
+        try
+        {
+            if (!Directory.Exists(path))
+            {
+                MessageBox.Show(this, $"目录已不在：\n{path}", "车间",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            Process.Start(new ProcessStartInfo("explorer.exe", $"\"{path}\"") { UseShellExecute = true });
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+                                       or System.ComponentModel.Win32Exception)
+        {
+            MessageBox.Show(this, "打不开资源管理器：" + ex.Message, "车间",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    /// <summary>注销车间登记（只摘登记，不删文件）。</summary>
+    private void DropShop(WsSite site)
+    {
+        if (_sites is null)
+            return;
+
+        var answer = MessageBox.Show(this,
+            $"把「{site.Name}」从车间清单里去掉吗？\n\n" +
+            $"目录和里面的文件都会原样保留：\n{site.Path}\n\n" +
+            "要真的删目录请用 ws_delete（它才有读全检查、备份与单独审批）。",
+            "注销登记", MessageBoxButton.OKCancel, MessageBoxImage.Question);
+
+        if (answer != MessageBoxResult.OK)
+            return;
+
+        if (!_sites.Drop(site.Name, out var error))
+        {
+            MessageBox.Show(this, error, "注销登记", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        AppendMessage("system", $"🏭 已注销车间登记：「{site.Name}」（文件保留）");
+        LoadShops();
+    }
+
+    /// <summary>
+    /// 车间栏双击：点在车间名上＝搬进去；点在车间里的文件/目录上＝老规矩（展开 / 默认程序打开）。
+    /// </summary>
+    private void OnShopTreeDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (ShopTree.SelectedItem is not TreeViewItem node)
+            return;
+
+        if (_shopNodes.TryGetValue(node, out var site))
+        {
+            e.Handled = true;
+            EnterShop(site);
+            return;
+        }
+
+        if (node.Tag is not string path)
+            return;
+
+        try
+        {
+            if (Directory.Exists(path))
+                node.IsExpanded = true;
+            else if (File.Exists(path))
+                Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+                                       or System.ComponentModel.Win32Exception)
+        {
+            MessageBox.Show(this, "打不开：" + path + "\n" + ex.Message, "车间",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    /// <summary>＋ 新建车间：起名 + 备注 → 建目录 → 登记 → 直接进去（与 ws_site_new 完全一致）。</summary>
+    private void OnNewShopClick(object sender, RoutedEventArgs e)
+    {
+        var sites = _sites;
+        if (sites is null || _workspaceSession is null)
+            return;
+
+        var (ok, name, note) = AskNewShop();
+        if (!ok)
+            return;
+
+        var site = sites.Create(name, note, out var error);
+
+        if (site is null)
+        {
+            MessageBox.Show(this, error, "新建车间", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        LoadShops();
+        EnterShop(site);
+    }
+
+    /// <summary>
+    /// 极简输入框：车间名 + 备注。
+    /// 不引入新的 XAML 窗口：一个字段数得过来的表单，为它单独加一个 .xaml 只是多一份要同步的东西。
+    /// </summary>
+    private (bool Ok, string? Name, string? Note) AskNewShop()
+    {
+        var win = new Window
+        {
+            Title = "新建车间",
+            Width = 400,
+            SizeToContent = SizeToContent.Height,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Owner = this,
+            ResizeMode = ResizeMode.NoResize,
+            ShowInTaskbar = false,
+        };
+
+        var panel = new StackPanel { Margin = new Thickness(16) };
+
+        panel.Children.Add(new TextBlock
+        {
+            Text = "车间名（留空自动生成）",
+            FontSize = 11,
+            Margin = new Thickness(0, 0, 0, 4),
+        });
+
+        var nameBox = new TextBox { FontSize = 12, Padding = new Thickness(4) };
+        panel.Children.Add(nameBox);
+
+        panel.Children.Add(new TextBlock
+        {
+            Text = "备注：这处车间干什么用",
+            FontSize = 11,
+            Margin = new Thickness(0, 12, 0, 4),
+        });
+
+        var noteBox = new TextBox { FontSize = 12, Padding = new Thickness(4) };
+        panel.Children.Add(noteBox);
+
+        panel.Children.Add(new TextBlock
+        {
+            Text = @"同名不能重复；目录会建在 <库房>\sites\ 下；建完直接进去。",
+            FontSize = 10,
+            Margin = new Thickness(0, 8, 0, 0),
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = (Brush)FindResource("FgMuted"),
+        });
+
+        var buttons = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Margin = new Thickness(0, 12, 0, 0),
+        };
+
+        var okButton = new Button
+        {
+            Content = "建",
+            Padding = new Thickness(14, 2, 14, 2),
+            Margin = new Thickness(0, 0, 8, 0),
+            IsDefault = true,
+        };
+
+        var cancelButton = new Button
+        {
+            Content = "取消",
+            Padding = new Thickness(14, 2, 14, 2),
+            IsCancel = true,
+        };
+
+        buttons.Children.Add(okButton);
+        buttons.Children.Add(cancelButton);
+        panel.Children.Add(buttons);
+
+        win.Content = panel;
+
+        okButton.Click += (_, _) => win.DialogResult = true;
+        win.Loaded += (_, _) => nameBox.Focus();
+
+        return win.ShowDialog() == true
+            ? (true, nameBox.Text, noteBox.Text)
+            : (false, null, null);
+    }
+
     private void LoadTree(string root)
     {
         FileTree.Items.Clear();
+
+        StorehouseHint.Text = root;
 
         if (!Directory.Exists(root))
             return;
@@ -1322,8 +2011,362 @@ public partial class MainWindow : Window, INotifyPropertyChanged, IAgentObserver
         {
             e.Handled = true;
             ClearChat("已新建会话");
+            return;
+        }
+
+        if (e.Key == Key.R && Keyboard.Modifiers == ModifierKeys.Control)
+        {
+            e.Handled = true;
+            ReloadConfig();
         }
     }
+
+    // ---------- 配置热重载 / 预设（2026-11-06 新增） ----------
+
+    /// <summary>热重载进行中（防止菜单连点导致并发重建）。</summary>
+    private bool _reloading;
+
+    /// <summary>
+    /// 热重载：重读 .env + 激活的预设，再把「依赖这些值的对象」全部重建。
+    /// </summary>
+    /// <remarks>
+    /// ★ 只把环境变量改掉是不够的。<see cref="DeepSeekClient"/>、<see cref="NetService"/>、
+    ///   <see cref="VerifierService"/> 都是在构造时把配置**抄进去**的，
+    ///   所以「环境变量更新了、请求还发往旧地址」是这个功能最典型的假成功。
+    ///   重建范围必须与 <see cref="BootAgent"/> 一致 —— 那边加了一个连接，这里就要跟一处。
+    ///
+    /// ★ 正在生成的回合不打断：<see cref="AgentLoop.SwapLlm"/> 只影响下一次请求。
+    ///   中途换客户端会让同一条回答前后来自两个模型，比不换更糟。
+    /// </remarks>
+    private bool ReloadConfig()
+    {
+        if (_guard is null || _context is null)
+            return false;
+
+        if (_reloading)
+            return false;
+
+        _reloading = true;
+
+        try
+        {
+            var result = EnvRuntime.Reload(_guard.Root);
+
+            foreach (var warning in result.Warnings)
+                Log("[配置] ⚠ " + warning);
+
+            RebuildConnections();
+            RebuildPresetMenu();
+
+            Log("[配置] " + result.Describe());
+
+            if (result.Touched)
+            {
+                AppendMessage("system",
+                    "配置已热重载：" + result.Describe()
+                    + (result.Changed.Count > 0
+                        ? "\n变更：" + string.Join("、", result.Changed.Take(8))
+                          + (result.Changed.Count > 8 ? " …" : string.Empty)
+                        : string.Empty));
+            }
+            else
+            {
+                StatusText = "配置已重读，没有变化";
+            }
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Log("[配置] 热重载失败：" + ex.Message);
+            AppendMessage("system", "配置热重载失败（连接保持不变）：" + ex.Message);
+            return false;
+        }
+        finally
+        {
+            _reloading = false;
+        }
+    }
+
+    /// <summary>按当前环境变量重建三处连接。没有可用 key 时保持旧客户端，而不是把程序弄哑。</summary>
+    private void RebuildConnections()
+    {
+        // 1) 联网：HttpClient / 限速桶本来就随实例走；但台账（UsageLedger）是账本，
+        //    必须复用同一个实例 —— 换一个等于把已花的钱从账上抹掉。
+        var netOptions = NetOptions.FromEnvironment();
+
+        _net = new NetService(netOptions, _ledger);
+
+        if (_context is not null)
+            _context.Net = _net;
+
+        Log("[联网] " + netOptions.Describe());
+
+        // 2) 主模型
+        if (!LlmOptions.TryResolveApiKey(out _, out _))
+        {
+            AppendMessage("system", "配置里没有可用的 API Key，模型连接保持不变（其它改动已生效）。");
+            return;
+        }
+
+        var options = LlmOptions.FromEnvironment();
+        var llm = new DeepSeekClient(options);
+
+        _llm = llm;
+        _agent?.SwapLlm(llm);
+
+        ModelText = options.Model;
+
+        Log("[配置] 模型 " + options.Describe());
+
+        // 3) 审查员：VERIFIER_* 常常跟着预设一起换（切到 grok 后仍要有人审）
+        _verifyOptions = VerifyOptions.FromEnvironment(options);
+
+        _verifier = new VerifierService(
+            _verifyOptions,
+            log: msg => _ui?.Post(new UiEvent.PushSystem("\uD83E\uDDFF " + msg)),
+            logDirectory: Path.Combine(_guard?.Root ?? ".", "logs", "verify"));
+
+        _verify = new VerifySession(_verifier, msg => Log(msg));
+        _agent?.SwapVerify(_verify);
+
+        SyncVerifyMenu();
+
+        Log("[配置] 双人核验 " + _verifyOptions.Describe());
+
+        StatusText = "模型：" + options.Model
+            + "｜核验：" + (_verifyOptions.IsEnabled ? _verifyOptions.Mode.ToString() : "关")
+            + "｜工作台：" + (_guard?.Root ?? "未加载");
+    }
+
+    /// <summary>重建「配置 ▸ 预设」子菜单。勾选状态只在这一处生成，切完必须重建。</summary>
+    private void RebuildPresetMenu()
+    {
+        PresetMenu.Items.Clear();
+
+        if (_guard is null)
+            return;
+
+        var store = new ConfigPresetStore(_guard.Root);
+        var active = EnvRuntime.ActivePresetName(_guard.Root);
+
+        var none = new MenuItem
+        {
+            Header = "（不激活预设，只用 .env）",
+            IsCheckable = true,
+            IsChecked = active is null,
+            ToolTip = "回到「只用 .env」。预设带进来的键会在重载时被清掉，回到 .env 的值或程序默认值。",
+        };
+
+        none.Click += (_, _) => ActivatePreset(null);
+        PresetMenu.Items.Add(none);
+        PresetMenu.Items.Add(new Separator());
+
+        var presets = store.List();
+
+        if (presets.Count == 0)
+        {
+            PresetMenu.Items.Add(new MenuItem
+            {
+                Header = "（还没有预设 —— 用下面「把当前配置存为预设」建一个）",
+                IsEnabled = false,
+            });
+
+            return;
+        }
+
+        foreach (var preset in presets)
+        {
+            var item = new MenuItem
+            {
+                Header = preset.Name + "　—　" + preset.Describe(),
+                IsCheckable = true,
+                IsChecked = string.Equals(preset.Name, active, StringComparison.OrdinalIgnoreCase),
+                ToolTip = preset.FilePath + "\n最后修改 " + preset.Modified.ToString("yyyy-MM-dd HH:mm"),
+            };
+
+            var name = preset.Name;
+            item.Click += (_, _) => ActivatePreset(name);
+
+            PresetMenu.Items.Add(item);
+        }
+    }
+
+    private void OnReloadConfig(object sender, RoutedEventArgs e) => ReloadConfig();
+
+    /// <summary>激活（或取消）一个预设：先写进 .env，再热重载。</summary>
+    private void ActivatePreset(string? name)
+    {
+        if (_guard is null)
+            return;
+
+        try
+        {
+            var envPath = EnvRuntime.SetActivePreset(_guard.Root, name, out var backup);
+
+            Log("[配置] " + (name is null ? "已取消预设" : "激活预设「" + name + "」")
+                + " → " + envPath + (backup is null ? string.Empty : "（已备份 " + backup + "）"));
+
+            if (!ReloadConfig())
+                return;
+
+            StatusText = name is null ? "已取消预设，回到 .env" : "已切换到预设：" + name;
+        }
+        catch (Exception ex)
+        {
+            Log("[配置] 切换预设失败：" + ex.Message);
+            AppendMessage("system", "切换预设失败：" + ex.Message);
+        }
+    }
+
+    /// <summary>把当前真正生效的那套连接配置存成预设。名字取「模型名 (主机名)」，同名先问。</summary>
+    private void OnSavePresetAs(object sender, RoutedEventArgs e)
+    {
+        if (_guard is null)
+            return;
+
+        var captured = ConfigPresetStore.CaptureFromEnvironment();
+
+        if (captured.Count == 0)
+        {
+            MessageBox.Show(this,
+                "当前没有任何可保存的连接配置（连 FATFISH_API_KEY 都没有）。\n先让程序跑起来再存。",
+                "没有可保存的配置", MessageBoxButton.OK, MessageBoxImage.Information);
+
+            return;
+        }
+
+        var store = new ConfigPresetStore(_guard.Root);
+        var name = SuggestPresetName(captured);
+
+        if (store.Exists(name))
+        {
+            var overwrite = MessageBox.Show(this,
+                "预设「" + name + "」已经存在，覆盖它吗？\n（旧文件会先备份到 _backup）",
+                "覆盖预设", MessageBoxButton.YesNo, MessageBoxImage.Question);
+
+            if (overwrite != MessageBoxResult.Yes)
+                return;
+        }
+
+        try
+        {
+            var path = store.Save(name, captured);
+
+            Log("[配置] 已保存预设「" + name + "」→ " + path);
+            AppendMessage("system", "已保存预设「" + name + "」：" + path);
+            StatusText = "已保存预设：" + name;
+
+            RebuildPresetMenu();
+        }
+        catch (Exception ex)
+        {
+            Log("[配置] 保存预设失败：" + ex.Message);
+            AppendMessage("system", "保存预设失败：" + ex.Message);
+        }
+    }
+
+    /// <summary>预设默认名：<c>模型名 (主机名)</c>。主机名让人一眼看出花的是哪家的钱。</summary>
+    private static string SuggestPresetName(IReadOnlyDictionary<string, string?> values)
+    {
+        var model = values.TryGetValue("FATFISH_MODEL", out var m) && !string.IsNullOrWhiteSpace(m)
+            ? m!.Trim()
+            : "未命名";
+
+        var host = string.Empty;
+
+        if (values.TryGetValue("FATFISH_BASE_URL", out var b) && !string.IsNullOrWhiteSpace(b))
+        {
+            try
+            {
+                host = new Uri(b!.Trim()).Host;
+            }
+            catch (UriFormatException)
+            {
+                host = string.Empty;
+            }
+        }
+
+        var name = string.IsNullOrWhiteSpace(host) ? model : model + " (" + host + ")";
+
+        try
+        {
+            return ConfigPresetStore.Sanitize(name);
+        }
+        catch (ArgumentException)
+        {
+            return "预设";
+        }
+    }
+
+    private void OnOpenPresetDir(object sender, RoutedEventArgs e)
+    {
+        if (_guard is null)
+            return;
+
+        try
+        {
+            var dir = new ConfigPresetStore(_guard.Root).Directory;
+            Directory.CreateDirectory(dir);
+
+            Process.Start(new ProcessStartInfo("explorer.exe", "\"" + dir + "\"") { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            Log("打开预设目录失败：" + ex.Message);
+        }
+    }
+
+    /// <summary>「我改的为什么没生效」—— 把这次真正读的是哪份文件、哪些键来自预设列出来。</summary>
+    private void OnShowConfigSource(object sender, RoutedEventArgs e)
+    {
+        if (_guard is null)
+            return;
+
+        var (values, envPath, presetName, warnings) = EnvRuntime.Compose(_guard.Root);
+
+        var fromPreset = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        if (presetName is not null)
+        {
+            var preset = new ConfigPresetStore(_guard.Root).Load(presetName);
+
+            if (preset is not null)
+                foreach (var key in preset.Keys)
+                    fromPreset.Add(key);
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine("配置文件：" + (envPath ?? "（未找到）"));
+        sb.AppendLine("激活预设：" + (presetName ?? "（无）"));
+        sb.AppendLine("界面显示的模型：" + (ModelText ?? "（未初始化）"));
+        sb.AppendLine();
+
+        foreach (var key in new[]
+                 {
+                     "FATFISH_MODEL", "FATFISH_BASE_URL", "FATFISH_API_KEY",
+                     "VERIFIER_MODEL", "VERIFIER_BASE_URL", "VERIFIER_API_KEY",
+                 })
+        {
+            var raw = values.TryGetValue(key, out var v) ? v : null;
+
+            var shown = key.EndsWith("KEY", StringComparison.Ordinal)
+                ? MaskKey(raw)
+                : string.IsNullOrWhiteSpace(raw) ? "（未设置）" : raw;
+
+            sb.AppendLine(key + " = " + shown + (fromPreset.Contains(key) ? "   ← 预设" : string.Empty));
+        }
+
+        foreach (var warning in warnings)
+            sb.AppendLine("⚠ " + warning);
+
+        MessageBox.Show(this, sb.ToString(), "配置来源");
+    }
+
+    private static string MaskKey(string? value)
+        => string.IsNullOrWhiteSpace(value)
+            ? "（未设置）"
+            : value.Length <= 8 ? "****" : "***" + value[^4..];
 
     private void OnNewSession(object sender, RoutedEventArgs e) => ClearChat("已新建会话");
 
@@ -1453,6 +2496,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged, IAgentObserver
         if (_guard is null)
             return;
 
+        // ★ 非模态：编辑器开着的时候，主窗口照常能用（看会话、跑工具、按 Esc）。
+        //   以前用 ShowDialog，改一次 .env 的那几分钟里整个程序是冻住的。
+        if (_envWindow is not null)
+        {
+            _envWindow.Activate();
+            return;
+        }
+
         var (resolved, _) = EnvFile.LoadNearest(_guard.Root);
         var path = resolved ?? Path.Combine(_guard.Root, ".env");
 
@@ -1461,20 +2512,32 @@ public partial class MainWindow : Window, INotifyPropertyChanged, IAgentObserver
             Owner = this,
         };
 
-        var saved = dlg.ShowDialog();
-
-        if (dlg.RestartRequested)
+        dlg.Closed += (_, _) =>
         {
-            Relaunch();
-            return;
-        }
+            _envWindow = null;
 
-        if (saved == true)
-        {
-            Log("配置已保存：" + path + "（重启后生效）");
-            StatusText = "配置已保存，重启后生效";
-        }
+            if (dlg.RestartRequested)
+            {
+                Relaunch();
+                return;
+            }
+
+            // 以前这里是 `ShowDialog() == true`，可编辑器从来没设过 DialogResult，
+            // 所以这段日志**一次也没打出来过**。现在读它自己的 Saved 标志。
+            if (dlg.Saved)
+            {
+                Log("配置已保存：" + path + "（重启后生效）");
+                StatusText = "配置已保存，重启后生效";
+            }
+        };
+
+        _envWindow = dlg;
+        dlg.Show();
+        dlg.Activate();
     }
+
+    /// <summary>还开着的 .env 编辑器（非模态，只留一份）。</summary>
+    private EnvEditorWindow? _envWindow;
 
     /// <summary>
     /// 重启自己。
@@ -1542,7 +2605,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged, IAgentObserver
             + "内核：" + KernelStatus + "\n"
             + "工作台：" + (_guard?.Root ?? "未加载") + "\n"
             + "模型：" + (string.IsNullOrEmpty(ModelText) ? "未配置" : ModelText) + "\n\n"
-            + "本版为 2.0.1；Python 版已归档到 python 分支。",
+            + "原 Python 版仍在 E:\\FATFISH 正常运行，本版为并行迁移分支。",
             "关于肥鱼", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
@@ -1552,7 +2615,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged, IAgentObserver
             "Enter            发送\n"
             + "Shift + Enter    换行\n"
             + "Esc              停止当前回合\n"
-            + "Ctrl + N         新建会话\n\n"
+            + "Ctrl + N         新建会话\n"
+            + "Ctrl + + / -     正文字号放大 / 缩小"
+            + "Ctrl + 滚轮      正文字号缩放（指针在对话区）"
+            + "Ctrl + 0         字号恢复默认\n\n"
             + "双击左侧文件树里的文件，用系统默认程序打开。\n"
             + "拖动面板之间的分隔条可以调整宽度与高度。",
             "快捷键", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -1592,6 +2658,116 @@ public partial class MainWindow : Window, INotifyPropertyChanged, IAgentObserver
         BottomSplitterRow.Height = new GridLength(show ? 5 : 0);
         BottomPanel.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
         BottomSplitter.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    // ---------- 外观：字号 / 段间距 ----------
+
+    /// <summary>从 logs/ui/appearance.json 读回上次的字号与段间距。</summary>
+    private void LoadAppearance()
+    {
+        try
+        {
+            _appearance = AppearanceStore.Load(ResolveWorkspaceRoot());
+            NotifyAppearanceChanged();
+            Log("外观 " + _appearance);
+        }
+        catch (Exception ex)
+        {
+            // AppearanceStore.Load 自己已经吞掉 IO 异常，这里只兜最后一层：
+            // 读不回外观绝不该拦住启动。
+            _appearance = AppearanceSettings.Default;
+            Log("外观设置载入失败（用默认值）：" + ex.Message);
+        }
+    }
+
+    private void NotifyAppearanceChanged()
+    {
+        // 别写成 OnPropertyChanged(...)：Window 继承自 DependencyObject，
+        // 那个同名 protected 方法只收 DependencyPropertyChangedEventArgs，
+        // 传字符串会 CS1503 编译失败（这里已经踩过一次）。
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(MessageFontSize)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(MessageMargin)));
+    }
+
+    /// <summary>Ctrl + 加号 / 减号 / 0 —— 缩放与重置字号。</summary>
+    private void OnAppearanceKeyDown(object sender, KeyEventArgs e)
+    {
+        if (Keyboard.Modifiers != ModifierKeys.Control)
+            return;
+
+        switch (e.Key)
+        {
+            case Key.OemPlus:
+            case Key.Add:
+                e.Handled = true;
+                NudgeFontSize(+AppearanceSettings.FontStep);
+                break;
+
+            case Key.OemMinus:
+            case Key.Subtract:
+                e.Handled = true;
+                NudgeFontSize(-AppearanceSettings.FontStep);
+                break;
+
+            case Key.D0:
+            case Key.NumPad0:
+                e.Handled = true;
+                ApplyAppearance(_appearance with { FontSize = AppearanceSettings.DefaultFontSize }, "字号已恢复默认");
+                break;
+        }
+    }
+
+    /// <summary>Ctrl + 滚轮调字号（指针在消息区上）。</summary>
+    private void OnMessageScrollWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (Keyboard.Modifiers != ModifierKeys.Control)
+            return;
+
+        // 必须吃掉事件：否则 ScrollViewer 会先滚一大段，
+        // 用户的感受是「字放大了，但列表跑到别处去了」。
+        e.Handled = true;
+        NudgeFontSize(e.Delta > 0 ? +AppearanceSettings.FontStep : -AppearanceSettings.FontStep);
+    }
+
+    private void OnFontSizeUp(object sender, RoutedEventArgs e) => NudgeFontSize(+AppearanceSettings.FontStep);
+
+    private void OnFontSizeDown(object sender, RoutedEventArgs e) => NudgeFontSize(-AppearanceSettings.FontStep);
+
+    private void OnFontSizeReset(object sender, RoutedEventArgs e)
+        => ApplyAppearance(_appearance with { FontSize = AppearanceSettings.DefaultFontSize }, "字号已恢复默认");
+
+    private void OnBlockSpacingUp(object sender, RoutedEventArgs e) => NudgeBlockSpacing(+AppearanceSettings.BlockStep);
+
+    private void OnBlockSpacingDown(object sender, RoutedEventArgs e) => NudgeBlockSpacing(-AppearanceSettings.BlockStep);
+
+    private void OnBlockSpacingReset(object sender, RoutedEventArgs e)
+        => ApplyAppearance(_appearance with { BlockSpacing = AppearanceSettings.DefaultBlockSpacing }, "段间距已恢复默认");
+
+    private void NudgeFontSize(double delta)
+        => ApplyAppearance(_appearance with { FontSize = _appearance.FontSize + delta }, null);
+
+    private void NudgeBlockSpacing(double delta)
+        => ApplyAppearance(_appearance with { BlockSpacing = _appearance.BlockSpacing + delta }, null);
+
+    /// <summary>应用一份新外观：夹到合法范围 → 存盘 → 通知界面。</summary>
+    /// <remarks>
+    /// 存盘在这里做，而不是「关闭时统一写」：字号是即时反馈的东西，
+    /// 用户调完很可能直接拖走窗口（甚至断电），下次打开还是旧字号会显得很没记性。
+    /// </remarks>
+    private void ApplyAppearance(AppearanceSettings next, string? note)
+    {
+        var before = _appearance;
+        _appearance = next.Normalized();
+
+        AppearanceStore.Save(ResolveWorkspaceRoot(), _appearance);
+        NotifyAppearanceChanged();
+
+        var hitEdge = before.FontSize == _appearance.FontSize
+                      && before.BlockSpacing == _appearance.BlockSpacing;
+
+        StatusText = (note ?? "外观已更新") + "：" + _appearance + (hitEdge ? "（已到边界）" : string.Empty);
+
+        Log("外观 → " + _appearance);
     }
 
     // ---------- 夜间模式 ----------

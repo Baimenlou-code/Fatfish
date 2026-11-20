@@ -127,23 +127,37 @@ public static class EnvFile
     ///   三种情况的「根目录」位置完全不同，所以两个起点都要试。
     ///
     /// ★ 起点 0：<c>FATFISH_ENV</c> 环境变量（2026-10-29 新增）。
-    ///   背景：开发时程序目录与仓库根不一定同处，两处可能各有一份 .env；
-    ///   向上搜索会先撞见离得近的那份就停下，
-    ///   永远到不了工作台根的那份 —— 两份 .env 里的 API Key 不同，
+    ///   背景：本仓库的 C# 版放在 `E:\FATFISH\workspace\FatFishCS`，
+    ///   而 `workspace\` 自己有一份**旧** .env。向上搜索会在 workspace 那一层就停下，
+    ///   永远到不了真正的 `E:\FATFISH\.env` —— 两份 .env 里的 API Key 不同，
     ///   于是「用哪个 key」取决于从哪个目录启动，而且完全不报错。
     ///   指定 FATFISH_ENV 就能把「配置从哪来」这件事钉死，与工作台根解耦。
     /// </summary>
     public static (string? Path, int Count) LoadNearest(string startDirectory)
+    {
+        var path = ResolvePath(startDirectory);
+
+        return (path, path is null ? 0 : Load(path));
+    }
+
+    /// <summary>
+    /// 只解析「实际生效的那份 .env 是哪个文件」，<b>不读取、不改环境变量</b>。
+    ///
+    /// ★ 为什么要把这段从 <see cref="LoadNearest"/> 里拆出来（2026-11-06）：
+    ///   热重载（<see cref="EnvRuntime.Reload"/>）需要「再解析一次路径」，
+    ///   而 <see cref="Load"/> 有一道 <c>LoadedFiles</c> 去重 —— 同一个文件第二次调用直接返回 0。
+    ///   若热重载复用 LoadNearest，就会表现为「重载成功，但一个键都没更新」；
+    ///   更糟的是调用方拿到 Count=0 会以为「文件没找到」，从而走上「拿默认值」的分支。
+    ///   所以「找路径」和「装载」必须拆成两个可以各自调用的动作。
+    /// </summary>
+    public static string? ResolvePath(string startDirectory)
     {
         // ---- 起点 0：显式指定 ----
         // 找不到也照样返回这个路径（Count=0），让上层把「路径写错了」直接显示出来。
         // 静默回退到自动搜索会让配置问题变成「明明改了却不生效」。
         var explicitEnv = Environment.GetEnvironmentVariable("FATFISH_ENV");
         if (!string.IsNullOrWhiteSpace(explicitEnv))
-        {
-            var explicitPath = explicitEnv.Trim().Trim('"');
-            return (explicitPath, Load(explicitPath));
-        }
+            return explicitEnv.Trim().Trim('"');
 
         var roots = new List<string>();
 
@@ -181,11 +195,11 @@ public static class EnvFile
 
                 var candidate = Path.Combine(dir.FullName, ".env");
                 if (File.Exists(candidate))
-                    return (candidate, Load(candidate));
+                    return candidate;
             }
         }
 
-        return (null, 0);
+        return null;
     }
 
     // ---------- 取值助手 ----------

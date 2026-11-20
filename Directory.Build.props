@@ -30,7 +30,14 @@
 
     <Product>FatFish 启动器</Product>
     <Company>FatFish</Company>
-    <Version>2.0.1</Version>
+    <Version>2.1.1</Version>
+
+    <!--
+      许可与版权（2026-11-20 定：Apache-2.0，署名用 GitHub 账号）。
+      版权行同时写进安装包的 LICENSE / NOTICE，三处保持一致。
+    -->
+    <Copyright>Copyright 2026 Baimenlou-code</Copyright>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
 
     <!-- 统一输出目录，便于排查 -->
     <AppendTargetFrameworkToOutputPath>true</AppendTargetFrameworkToOutputPath>

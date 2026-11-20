@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -80,6 +80,26 @@ public sealed class MessageItem : INotifyPropertyChanged
 
         _buffer.Append(delta);
         Text = _buffer.ToString();
+    }
+
+    /// <summary>
+    /// 追加流式文本，但**不发通知**。
+    /// </summary>
+    /// <remarks>
+    /// 给「直接往 TextBox 里 AppendText」那条路用：
+    ///   控件已经把字画上去了，再发一次 PropertyChanged 只会让绑定把整段文字
+    ///   重新赋给 TextBox —— 等于把刚省下来的整段重排又做一遍。
+    ///
+    /// 但 <see cref="Text"/> 仍然保持最新，这样虚拟化回收后重新实例化、
+    /// 或者会话落盘时，读到的都是完整正文，不会因为「没发通知」丢内容。
+    /// </remarks>
+    public void AppendSilent(string delta)
+    {
+        if (string.IsNullOrEmpty(delta))
+            return;
+
+        _buffer.Append(delta);
+        _text = _buffer.ToString();
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;

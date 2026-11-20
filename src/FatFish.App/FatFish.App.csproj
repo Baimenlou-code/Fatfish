@@ -12,6 +12,9 @@
     <AssemblyName>FatFish</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
 
+    <!-- 应用图标：exe 文件、任务栏、Alt+Tab 共用这一份多尺寸 ICO -->
+    <ApplicationIcon>Assets\FatFish.ico</ApplicationIcon>
+
     <!-- 单文件发布相关（发布时才生效，调试不影响） -->
     <RuntimeIdentifier Condition="'$(Configuration)'=='Release'">win-x64</RuntimeIdentifier>
     <PublishSingleFile Condition="'$(Configuration)'=='Release'">true</PublishSingleFile>
@@ -22,6 +25,11 @@
 
   <ItemGroup>
     <ProjectReference Include="..\FatFish.Core\FatFish.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 标题栏图标：XAML 里 Icon="/Assets/FatFish.ico" 需要它作为 Resource 打进程序集 -->
+    <Resource Include="Assets\FatFish.ico" />
   </ItemGroup>
 
 </Project>

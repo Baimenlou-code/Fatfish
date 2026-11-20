@@ -88,7 +88,13 @@ public sealed class PathGuard
         if (!Directory.Exists(full))
             throw new DirectoryNotFoundException($"工作台根目录不存在：{full}");
 
-        _root = full.Length > 1 ? full.TrimEnd(Sep) : full;
+        // ★ 不能直接 TrimEnd(Sep)：盘符根 "E:\" 会被削成 "E:"，而 "E:" 在 Windows 上
+        //   是「驱动器相对路径」（= 该盘的当前目录），不是完全限定路径。
+        //   后果是 Resolve("") 返回 "E:"，随后 Directory.* 直接抛
+        //   "Basepath argument is not fully qualified"，整个工作台当场不可用
+        //   （2026-11-13 ws_cd E:\ 实际踩到过）。
+        //   TrimEndingDirectorySeparator 正是为此设计：只削非根路径的尾分隔符。
+        _root = Path.TrimEndingDirectorySeparator(full);
         _rootWithSep = _root.EndsWith(Sep) ? _root : _root + Sep;
     }
 

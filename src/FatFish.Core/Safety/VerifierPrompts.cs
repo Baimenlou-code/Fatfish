@@ -91,7 +91,10 @@ public static class VerifierPrompts
         "敏感文件（.env / 私钥 / 凭证）在改写前一律需要，且备份不得落在模型可读的位置。\n" +
         "· 不需要：新建文件、纯追加、或删改的是可再生成物（构建产物、临时脚本、缓存、_backup/ 里的旧副本）。\n" +
         "· 最小方案：整份复制到 `_backup/<原文件名>.<时间戳>.bak`。" +
-        "根一级文件由程序自动备份；其余路径需要你在【要求】里点名让执行者先复制。" +
+        "程序已自动备份：ws_write / ws_append / ws_replace / ws_delete 在改写或删除已有文件前，"
+        + "会把原文件复制到 `_backup/`（根一级）或 `_backup/tree/<原路径>`（深层），每个文件保留最近 5 份；"
+        + "例外是构建/依赖产物目录与超过 4MB 的文件，此时结果里 `backup_skipped` 会写明原因 —— "
+        + "只有该理由确实意味着不可逆风险时，才要求执行者手动再备一份。" +
         "命令类动作无法预知会改哪些文件时，先要求执行者列出目标路径，再决定备份范围。\n" +
         "· **「不需要备份」不等于放行**：备份只解决「改坏了能不能回去」，" +
         "动作本身是否安全、是否越界，仍要单独判断。\n" +
@@ -202,8 +205,20 @@ public static class VerifierPrompts
             "ws_cd" => $"切换工作台根目录 [cd]：{GetString(args, "path")}",
             "ws_cd_approve" => "批准并执行「移出默认作业区」的工作台切换 [cd approve]",
 
+            "ws_site_new" =>
+                $"新建临时工地并切换过去 [site new]：{GetString(args, "name") ?? "（自动命名）"}" +
+                (GetString(args, "note") is { Length: > 0 } note ? $"｜备注：{note}" : string.Empty),
+
+            "ws_site_enter" => $"进入工地 [site enter]：{GetString(args, "name")}",
+            "ws_site_home" => "回常用工作台 [site home]（不删任何工地）",
+            "ws_site_drop" => $"注销工地登记 [site drop]（不删文件）：{GetString(args, "name")}",
+            "ws_site_list" => "列出工地清单 [site list]",
+
             "ws_run_cmd" =>
-                $"执行命令 [run cmd]（cwd={GetString(args, "cwd")}，" +
+                // ★ shell 必须显示（2026-11-06）：不写它，审查员只能当 cmd 看，
+                //   于是把 powershell 下的正确写法判成「cmd.exe 里没有这个命令」。
+                $"执行命令 [run cmd]（shell={GetString(args, "shell") ?? "cmd"}，" +
+                $"cwd={GetString(args, "cwd")}，" +
                 $"timeout={GetInt(args, "timeout") ?? 120}）：\n" +
                 $"{Indent(Prev("command", options.ActionPreview))}",
 
@@ -285,9 +300,13 @@ public static class VerifierPrompts
         {
             var f = facts ?? ShellFacts.Collect();
 
+            // ★ 带上每条命令自己的解释器（2026-11-06）：ws_run_cmd 有 shell 参数，
+            //   传 powershell 时命令根本不经 cmd —— 预检若仍按 cmd 方言扫，
+            //   会把正确的 Get-ChildItem 判成「必然失败」，审查员据此驳回能跑通的命令。
             var commands = request.Actions
                 .Where(a => a.Name is "ws_run_cmd" or "ws_bg_cmd")
-                .Select(a => (a.Name, GetString(a.Args, "command") ?? string.Empty))
+                .Select(a => (a.Name, GetString(a.Args, "command") ?? string.Empty,
+                    GetString(a.Args, "shell") ?? "cmd"))
                 .ToList();
 
             var env = f.RenderFactsBlock();

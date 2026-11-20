@@ -49,7 +49,8 @@ public abstract record UiEvent
     /// </summary>
     public sealed record ApprovalRequested(
         Core.Tools.ApprovalRequest Request,
-        TaskCompletionSource<ApprovalDecision> Decision) : UiEvent;
+        TaskCompletionSource<ApprovalDecision> Decision,
+        CancellationToken Cancel = default) : UiEvent;
 
     /// <summary>错误提示。</summary>
     public sealed record Error(string Text) : UiEvent;
@@ -129,6 +130,12 @@ public sealed class UiDispatcher : IAsyncDisposable
                 {
                     // 用 Invoke（同步）而不是 BeginInvoke：
                     // 保证同一批事件按序应用，且异常能在本线程捕获。
+                    //
+                    // ★ 优先级是 Input 而不是 Background：
+                    //   Background 是最低一级，界面一忙（布局、文件树刷新）流式文字就得排在
+                    //   所有 Background 任务后面，攒够一批才一次性涌出来 —— 观感就是
+                    //   「一顿一顿地蹦」。Input 排在渲染之后、输入事件之列，
+                    //   既不会被饿死，也不会插到重绘前面去打乱顺序。
                     _dispatcher.Invoke(() =>
                     {
                         foreach (var evt in batch)
@@ -143,7 +150,7 @@ public sealed class UiDispatcher : IAsyncDisposable
                                 System.Diagnostics.Debug.WriteLine("[UiDispatcher] 处理事件失败: " + ex);
                             }
                         }
-                    }, DispatcherPriority.Background);
+                    }, DispatcherPriority.Input);
                 }
                 catch (TaskCanceledException)
                 {

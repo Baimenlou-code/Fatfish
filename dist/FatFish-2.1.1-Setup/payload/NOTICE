@@ -1,0 +1,12 @@
+FatFish 启动器
+Copyright 2026 Baimenlou-code
+
+This product includes the following third-party component:
+
+  dotnet-install.ps1
+  Copyright (c) .NET Foundation and contributors. All rights reserved.
+  Licensed under the MIT License.
+  Source: https://github.com/dotnet/install-scripts
+
+The contents of this NOTICE file are for informational purposes only and do
+not modify the License. See the LICENSE file for the full license text.

@@ -367,7 +367,7 @@ public partial class MainWindow
 
         _processDirty = false;
         _processText.Text = _processBuffer.ToString();
-        _processScroll?.ScrollToEnd();
+        FollowProcess();
     }
 
     private void ClearProcessPane()

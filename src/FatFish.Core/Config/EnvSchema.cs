@@ -171,6 +171,19 @@ public static class EnvSchema
         },
         new EnvField
         {
+            Key = "FATFISH_PRESET",
+            Label = "激活的预设",
+            Group = GroupLlm,
+            Kind = EnvFieldKind.Choice,
+            AllowCustomChoice = true,
+            Choices = [],
+            Advanced = true,
+            Placeholder = "留空 = 不用预设",
+            Help = "填一个预设名，这套配置就会覆盖同名键。预设文件在 工作台\\config\\presets\\<名字>.env。",
+            Warning = "名字写错不会报错，只会「看起来没生效」—— 切完记得看日志里的预设名对不对。",
+        },
+        new EnvField
+        {
             Key = "FATFISH_TEMPERATURE",
             Label = "温度",
             Group = GroupLlm,

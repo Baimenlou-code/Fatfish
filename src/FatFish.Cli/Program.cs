@@ -124,6 +124,11 @@ public static class Program
             new WsForgetTool(),
             new WsCdTool(),
             new WsCdApproveTool(),
+            new WsSiteNewTool(),
+            new WsSiteListTool(),
+            new WsSiteEnterTool(),
+            new WsSiteHomeTool(),
+            new WsSiteDropTool(),
             new WsRunCmdTool(),
             new WsRunPythonTool(),
             new WsBgCmdTool(),
@@ -173,7 +178,11 @@ public static class Program
         var policy = new ApprovalPolicy(wsSession) { Plugins = plugins };
 
         // ---------- 2. 配置 ----------
-        var (envPath, count) = EnvFile.LoadNearest(root);
+        // ★ 2026-11-17 修：原来用 EnvFile.LoadNearest —— 只读 .env、不看 FATFISH_PRESET，
+        //   同一个 .env 在 GUI 和命令行会跑出两套模型（GUI 里点了预设，CLI 里当没点）。
+        //   启动装载与热重载必须是同一套语义：.env + 激活的预设，文件优先。
+        var startup = EnvRuntime.ApplyStartup(root);
+        var envPath = startup.EnvPath;
 
         if (envPath is null)
         {
@@ -181,7 +190,11 @@ public static class Program
             return 3;
         }
 
-        Console.WriteLine($"配置   : {envPath}（载入 {count} 项）");
+        foreach (var warning in startup.Warnings)
+            WriteWarn(warning);
+
+        Console.WriteLine($"配置   : {envPath}（装载 {startup.AppliedCount} 项）"
+            + (startup.PresetName is null ? string.Empty : $"｜预设 {startup.PresetName}"));
 
         // 与 Python 版同序：FATFISH_API_KEY 优先，DEEPSEEK_API_KEY 作为旧写法兼容。
         if (!LlmOptions.TryResolveApiKey(out _, out _))
@@ -215,6 +228,9 @@ public static class Program
 
         using var net = new NetService(NetOptions.FromEnvironment(), ledger);
 
+        // 工地登记簿：常用工作台 + 若干临时工地（落盘在 <默认作业区>\_sites.json）。
+        var sites = new WorkspaceSites(wsSession);
+
         var context = new ToolContext
         {
             // Guard / Tickets 是「初始绑定」，Workspace 会让它们跟着会话走：
@@ -222,6 +238,7 @@ public static class Program
             Guard = guard,
             Tickets = tickets,
             Workspace = wsSession,
+            Sites = sites,
             Approval = policy,
             Jobs = jobs,
             Net = net,

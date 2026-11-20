@@ -1,5 +1,7 @@
 using System;
+using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -113,6 +115,12 @@ public partial class MainWindow
             SyncApprovalBar(ApprovalLevel.WriteFree);
             ApplyApprovalLevel(ApprovalLevel.WriteFree, announce: false);
 
+            // 读回上次的两个偏好（开子代理是否要审批、每轮回合上限）。
+            // 读不到 / 读坏了都退回默认 —— 而且默认在更严的那一侧。
+            var prefs = ApprovalPrefs.Load(ApprovalPrefsPath);
+            ApplySubagentGate(prefs.RequireSubagentApproval, announce: false, persist: false);
+            ApplyRoundLimit(prefs.RoundLimit, announce: false, persist: false);
+
             Log("[审批] 顶栏审批栏已就绪（图标按钮，点开选档位）");
         }
         catch (Exception ex)
@@ -158,6 +166,58 @@ public partial class MainWindow
             menu.Items.Add(item);
         }
 
+        // ---- 档位之下：一个独立的开关（与敏感文件同级的那条硬线）----
+        menu.Items.Add(new Separator());
+
+        var gate = new MenuItem
+        {
+            Header = "开子代理需要审批",
+            IsCheckable = true,
+            IsChecked = _policy?.RequireApprovalForSubagents ?? true,
+            ToolTip = "勾上（默认）：每次 subagent_run 都要你点一次允许，且不接受「本次会话放行」。\n" +
+                      "取消：开子代理不再弹窗，但内核的 AI 核验照旧，动作照样进日志。\n" +
+                      "为什么它单独一条：子代理是另一个模型、另一份上下文，" +
+                      "一次放行换来的是一整段你看不见的连续动作 —— 而档位里的「免批」，" +
+                      "原本是针对「你盯着看的一次动作」。",
+        };
+
+        gate.Click += (_, _) => ApplySubagentGate(gate.IsChecked, announce: true);
+        menu.Items.Add(gate);
+
+        // ---- 再往下：每轮回合上限（子菜单）----
+        //   放这里而不是另起一栏：它和上面两条一样，是「这一批活我放多开」的设置，
+        //   而不是 .env 那种要重启的配置。
+        var limitMenu = new MenuItem
+        {
+            Header = "每轮回合上限",
+            ToolTip = "一次输入里，模型最多能和工具来回几轮。到顶就停（当前轮的结论会保留）。\n" +
+                      "调高 / 不限会让长任务一次跑完，但也会让一次跑偏的对话花掉更多 token。",
+        };
+
+        var currentLimit = _policy?.RoundLimit ?? ApprovalPolicy.DefaultRoundLimit;
+
+        foreach (var choice in ApprovalPolicy.RoundLimitChoices)
+        {
+            var picked = choice;
+
+            var item = new MenuItem
+            {
+                Header = ApprovalPolicy.RoundLimitName(picked),
+                IsCheckable = true,
+                IsChecked = picked == currentLimit,
+                ToolTip = picked <= 0
+                    ? "不设上限：只有模型自己结束、你中断、或出错时才停。\n" +
+                      "长任务用这个；但一次跑偏的对话也会一路烧下去。"
+                    : $"跑到第 {picked} 轮就停，已完成的改动保留。\n" +
+                      "可在运行中直接改，下一轮立刻按新值判断。",
+            };
+
+            item.Click += (_, _) => ApplyRoundLimit(picked, announce: true);
+            limitMenu.Items.Add(item);
+        }
+
+        menu.Items.Add(limitMenu);
+
         LastApprovalMenu = menu;
         menu.IsOpen = true;
     }
@@ -179,7 +239,11 @@ public partial class MainWindow
             "· 敏感文件凭密码：全部自动放行；碰敏感文件时输入口令代替弹窗\n" +
             "图标颜色＝当前档位：红＝最严　黄＝读免批　蓝＝除敏感外免批　紫＝凭密码\n" +
             "免掉人工批准时，送审材料里会明确告知审查员「本批无人逐条确认，请从严」，\n" +
-            "审查员因此会按更严的标准把关 —— 但它的结论只是意见，别把档位当成「关掉核验」。";
+            "审查员因此会按更严的标准把关 —— 但它的结论只是意见，别把档位当成「关掉核验」。\n" +
+            "菜单底部另有两个子项：\n" +
+            "· 「开子代理需要审批」（默认开，与敏感文件同级）\n" +
+            "· 「每轮回合上限」：15 / 25 / 35 / 50 / 100 / 不限，默认 25 轮 ——\n" +
+            "  改完立刻对运行中的对话生效（下一次轮次开始就按新值判断）。";
     }
 
     /// <summary>菜单每一项的悬停说明（写清「这一档会放行什么」）。</summary>
@@ -201,6 +265,102 @@ public partial class MainWindow
             "全部自动放行；碰敏感文件时输入口令代替弹窗。\n" +
             "口令只在宿主进程里，模型拿不到 —— 所以它无法自我授权。",
     };
+
+    /// <summary>
+    /// 切换「开子代理需人工确认」并落盘。
+    /// </summary>
+    /// <remarks>
+    /// 落盘位置与字号 / 窗口位置同一处（logs/ui/），因为它也是「这台机器上的偏好」，
+    /// 而不是 .env 那种要重启才生效的配置。读失败时按「开」处理 —— 失败即更严。
+    /// </remarks>
+    private void ApplySubagentGate(bool require, bool announce, bool persist = true)
+    {
+        if (_policy is null)
+        {
+            if (announce)
+                Log("[审批] 内核尚未就绪，子代理开关没有生效");
+
+            return;
+        }
+
+        _policy.RequireApprovalForSubagents = require;
+
+        // 只有「用户真的点了」才落盘。启动时读回也写一次的话，每次开程序都动一下日志目录，
+        // 而且一旦读到坏文件，会顺手把默认值覆盖上去，把真正的原因抹掉。
+        if (persist)
+            SaveApprovalPrefs();
+
+        if (!announce)
+            return;
+
+        Log(require
+            ? "[审批] 开子代理 = 需要人工确认（且不接受「本次会话放行」）"
+            : "[审批] 开子代理 = 不再弹窗（AI 核验照旧，动作仍进日志）");
+
+        StatusText = require ? "[审批] 子代理启动需确认" : "[审批] 子代理启动免批";
+    }
+
+    /// <summary>
+    /// 切换「每轮回合上限」并落盘（0 = 不限）。
+    /// </summary>
+    /// <remarks>
+    /// ★ 改的是 <see cref="ApprovalPolicy.RoundLimit"/>，而 AgentLoop 在每一轮开头
+    ///   都会重新读一次 —— 所以正跑着的对话从下一轮起就按新值判断，
+    ///   不需要重启，也不会打断已经在跑的那一轮。
+    /// ★ 调低不会「砍掉」当前轮：上限判断发生在轮次<b>开始之前</b>，
+    ///   已经开始的这一轮会完整跑完（工具调用不会半途中止）。
+    /// </remarks>
+    private void ApplyRoundLimit(int limit, bool announce, bool persist = true)
+    {
+        if (_policy is null)
+        {
+            if (announce)
+                Log("[审批] 内核尚未就绪，回合上限没有生效");
+
+            return;
+        }
+
+        _policy.RoundLimit = limit;
+
+        if (persist)
+            SaveApprovalPrefs();
+
+        if (!announce)
+            return;
+
+        Log(limit <= 0
+            ? "[审批] 每轮回合上限 = 不限（只有模型结束 / 你中断 / 出错时才会停）"
+            : $"[审批] 每轮回合上限 = {limit} 轮");
+
+        StatusText = "[审批] 上限 " + ApprovalPolicy.RoundLimitName(limit);
+    }
+
+    /// <summary>审批栏偏好的落盘路径（logs/ui/approval.json）。</summary>
+    private string ApprovalPrefsPath
+        => Path.Combine(_guard?.Root ?? ".", "logs", "ui", ApprovalPrefs.FileName);
+
+    /// <summary>
+    /// 把当前两个偏好一起写盘。
+    /// </summary>
+    /// <remarks>
+    /// ★ 必须<b>一起</b>写：文件里有两个字段，各写各的会覆盖对方 ——
+    ///   表现是「改了回合上限，子代理开关自己变回默认」，而且只在下次启动才被发现。
+    /// ★ 记不住不影响本次生效；但必须留痕，否则重启后「自己变回去了」查不出来。
+    /// </remarks>
+    private void SaveApprovalPrefs()
+    {
+        if (_policy is null)
+            return;
+
+        var snapshot = new ApprovalPrefs.Snapshot(
+            _policy.RequireApprovalForSubagents,
+            _policy.RoundLimit);
+
+        var error = ApprovalPrefs.Save(ApprovalPrefsPath, snapshot);
+
+        if (error is not null)
+            Log("[审批] 偏好没能记住（本次仍生效）：" + error);
+    }
 
     /// <summary>真正切档位：改策略、必要时收回「一键放行」、刷新界面与日志。</summary>
     private void ApplyApprovalLevel(ApprovalLevel level, bool announce)

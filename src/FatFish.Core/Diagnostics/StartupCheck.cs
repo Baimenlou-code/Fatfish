@@ -81,7 +81,7 @@ public sealed record StartupReport(IReadOnlyList<CheckItem> Items)
 ///   真需要连通性验证时用 <c>fatfish --probe</c>，那是个显式动作。
 ///
 /// ★ 每一条 CheckItem 都必须给出「可操作的 Hint」，不能只说「失败」。
-///   「.env 未找到」是事实，而「在工作台根放一个 .env，写上 FATFISH_API_KEY=sk-xxx」
+///   「.env 未找到」是事实，而「在 E:\FATFISH 放一个 .env，写上 FATFISH_API_KEY=sk-xxx」
 ///   才是用户需要的东西。
 /// </summary>
 public static class StartupCheck
@@ -129,7 +129,11 @@ public static class StartupCheck
     {
         try
         {
-            var (path, count) = EnvFile.LoadNearest(root);
+            // 与启动路径同一套语义（.env + 激活的预设）。若这里用 LoadNearest，
+            // 自检会报「API Key = ***1234」而实际跑起来用的是预设里另一把 —— 自检反而误导。
+            var startup = EnvRuntime.ApplyStartup(root);
+            var path = startup.EnvPath;
+            var count = startup.AppliedCount;
 
             if (path is null)
             {
@@ -140,7 +144,9 @@ public static class StartupCheck
             }
 
             return new CheckItem(
-                "配置文件", CheckStatus.Ok, $"{path}（载入 {count} 项）");
+                "配置文件", CheckStatus.Ok,
+                $"{path}（载入 {count} 项）"
+                + (startup.PresetName is null ? string.Empty : $"｜激活预设：{startup.PresetName}"));
         }
         catch (Exception ex)
         {

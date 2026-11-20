@@ -191,4 +191,71 @@ public class ApprovalPolicyTests : IDisposable
     {
         Assert.Equal(expected, _guard.CheckSensitive(path).IsSensitive);
     }
+
+    // ==================================================================
+    // 每轮回合上限（顶栏「审批」栏的子选项）
+    // ==================================================================
+
+    [Fact]
+    public void RoundLimit_DefaultsToTwentyFive()
+    {
+        Assert.Equal(25, ApprovalPolicy.DefaultRoundLimit);
+        Assert.Equal(25, NewPolicy().RoundLimit);
+    }
+
+    [Fact]
+    public void RoundLimit_ZeroMeansUnlimited()
+    {
+        var policy = NewPolicy();
+        policy.RoundLimit = 0;
+
+        Assert.Equal(0, policy.RoundLimit);
+    }
+
+    /// <summary>
+    /// 负数归一成 0（不限），不是归一成默认 25。
+    /// </summary>
+    /// <remarks>
+    /// ★ 选「≤ 0 一律表示不限」是为了让语义只有一条：
+    ///   否则「-1 到底该算更严还是更松」就得查实现才知道，
+    ///   而这种歧义最终一定会以「某处判了 &gt; 0、另一处判了 &gt;= 0」的形式爆出来。
+    /// </remarks>
+    [Fact]
+    public void RoundLimit_NegativeValue_NormalizesToUnlimited()
+    {
+        var policy = NewPolicy();
+        policy.RoundLimit = -5;
+
+        Assert.Equal(0, policy.RoundLimit);
+    }
+
+    [Theory]
+    [InlineData(15, "15 轮")]
+    [InlineData(100, "100 轮")]
+    [InlineData(0, "不限轮数")]
+    [InlineData(-1, "不限轮数")]
+    public void RoundLimitName_IsHumanReadable(int limit, string expected)
+    {
+        Assert.Equal(expected, ApprovalPolicy.RoundLimitName(limit));
+    }
+
+    [Fact]
+    public void RoundLimitChoices_MatchMenuOrder()
+    {
+        // 用局部变量而不是直接塞 new[]：CA1861 会把「常量数组参数」判为可优化的重复分配
+        int[] expected = [15, 25, 35, 50, 100, 0];
+
+        Assert.Equal(expected, ApprovalPolicy.RoundLimitChoices);
+    }
+
+    [Theory]
+    [InlineData(15, true)]
+    [InlineData(0, true)]
+    [InlineData(26, false)]
+    [InlineData(99999, false)]
+    [InlineData(-5, false)]
+    public void IsValidRoundLimit_AcceptsOnlyMenuValues(int limit, bool expected)
+    {
+        Assert.Equal(expected, ApprovalPolicy.IsValidRoundLimit(limit));
+    }
 }

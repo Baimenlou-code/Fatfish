@@ -18,15 +18,25 @@ public class EnvFileTests : IDisposable
 {
     private readonly string _dir;
     private readonly List<string> _touched = new();
+    private readonly string? _savedWorkspace;
 
     public EnvFileTests()
     {
+        // ★ 测试不能依赖 ambient 环境（2026-11-06）。
+        //   FatFish 拉起子进程时会带上 FATFISH_WORKSPACE，而 EnvFile.LoadNearest
+        //   把它当成**优先搜索起点**（排在调用方给的目录之前）。于是「从程序里跑测试」
+        //   会出现本机通过、里面必红的假失败 —— 明明没改坏任何东西。
+        _savedWorkspace = Environment.GetEnvironmentVariable("FATFISH_WORKSPACE");
+        Environment.SetEnvironmentVariable("FATFISH_WORKSPACE", null);
+
         _dir = Path.Combine(Path.GetTempPath(), "fatfish_env_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_dir);
     }
 
     public void Dispose()
     {
+        Environment.SetEnvironmentVariable("FATFISH_WORKSPACE", _savedWorkspace);
+
         foreach (var key in _touched)
             Environment.SetEnvironmentVariable(key, null);
 
@@ -173,9 +183,9 @@ public class EnvFileTests : IDisposable
     /// <summary>
     /// FATFISH_ENV 指定了路径，就**只**用它，不再向上搜索。
     ///
-    /// 这条守的是一个真实踩到的坑：程序目录下有一份旧 .env，
-    /// 而真正要用的配置在工作台根，于是向上搜索总在半路就停下，
-    /// 读不到工作台根的那份。两份 .env 的 API Key 不同，结果是
+    /// 这条守的是一个真实踩到的坑：`E:\FATFISH\workspace\` 下有一份旧 .env，
+    /// 而 C# 项目在 `workspace\FatFishCS\`，于是向上搜索总在 workspace 那一层停下，
+    /// 永远读不到 `E:\FATFISH\.env`。两份 .env 的 API Key 不同，结果是
     /// 「从哪个目录启动，就连到哪个账号」，而且一声不响。
     /// </summary>
     [Fact]

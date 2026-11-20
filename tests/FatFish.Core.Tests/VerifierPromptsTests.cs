@@ -194,6 +194,26 @@ public class VerifierPromptsTests
     }
 
     [Fact]
+    public void DescribeAction_RunCmd_ShowsShell()
+    {
+        // 不显示 shell，审查员只能当 cmd 看 —— 实测因此驳回过一条本来能跑通的 powershell 命令
+        var text = VerifierPrompts.DescribeAction(
+            "ws_run_cmd", Args(new { command = "Get-ChildItem", shell = "powershell" }), Options());
+
+        Assert.Contains("shell=powershell", text);
+        Assert.Contains("Get-ChildItem", text);
+    }
+
+    [Fact]
+    public void DescribeAction_RunCmd_DefaultsToCmd()
+    {
+        var text = VerifierPrompts.DescribeAction(
+            "ws_run_cmd", Args(new { command = "dir /b" }), Options());
+
+        Assert.Contains("shell=cmd", text);
+    }
+
+    [Fact]
     public void DescribeAction_BackgroundCmd_IsRenderedAsSideEffect()
     {
         var text = VerifierPrompts.DescribeAction(
@@ -259,6 +279,20 @@ public class VerifierPromptsTests
 
         Assert.Contains("notes.md", text);
         Assert.Contains("hello", text);
+    }
+
+    [Fact]
+    public void BuildActionPrompt_CarriesShellIntoActionList()
+    {
+        var req = SampleRequest() with
+        {
+            Actions = new[] { ("ws_run_cmd", Args(new { command = "Get-ChildItem", shell = "powershell" })) },
+        };
+
+        var text = VerifierPrompts.BuildActionPrompt(req, Options());
+
+        // 动作清单里必须写明解释器，否则审查员只能按 cmd 判
+        Assert.Contains("shell=powershell", text);
     }
 
     [Fact]

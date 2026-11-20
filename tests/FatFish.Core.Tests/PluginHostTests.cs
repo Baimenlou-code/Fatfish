@@ -114,7 +114,7 @@ public sealed class PluginHostTests : IDisposable
         {
             Guard = guard,
             Tickets = new ReadTicketStore(guard),
-            Approval = new ApprovalPolicy(guard) { Level = ApprovalLevel.ReadFree },
+            Approval = new ApprovalPolicy(guard),
         };
     }
 

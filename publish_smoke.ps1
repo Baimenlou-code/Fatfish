@@ -13,14 +13,16 @@
 
 $ErrorActionPreference = 'Stop'
 
-$exe = 'src\FatFish.App\bin\Release\net10.0-windows\win-x64\publish\FatFish.exe'
+# 2026-11-20：$exe 原来是相对路径，只有 cwd == 仓库根时才找得到；
+# 工作区原来取 $PSScriptRoot\..（仓库外），现在都锚到脚本所在目录（= 仓库根）。
+$exe = Join-Path $PSScriptRoot 'src\FatFish.App\bin\Release\net10.0-windows\win-x64\publish\FatFish.exe'
 
 if (-not (Test-Path $exe)) { Write-Output "NO_EXE (先跑 build.cmd publish)"; exit 1 }
 
 $size = (Get-Item $exe).Length
 Write-Output ("EXE_SIZE_MB=" + [math]::Round($size / 1MB, 1))
 
-$env:FATFISH_WORKSPACE = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$env:FATFISH_WORKSPACE = (Resolve-Path $PSScriptRoot).Path
 
 $p = Start-Process -FilePath $exe -PassThru
 Write-Output ("STARTED pid=" + $p.Id)

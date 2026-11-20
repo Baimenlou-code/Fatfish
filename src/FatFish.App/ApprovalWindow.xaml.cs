@@ -33,6 +33,25 @@ public partial class ApprovalWindow : Window
     /// <summary>用户是否勾选了「本次会话内不再询问」。</summary>
     public bool AllowForSession { get; private set; }
 
+    /// <summary>
+    /// 用户做出了决定（允许 / 拒绝 / 口令通过）。
+    ///
+    /// ★ 为什么不再依赖 <c>DialogResult</c>：审批窗现在是**非模态**的（Show 而不是
+    ///   ShowDialog）。DialogResult 只能在 ShowDialog 里设置，设了会抛
+    ///   InvalidOperationException；而模态的代价是整个程序被冻住 —— 人在等你看，
+    ///   你却在等窗口结束，连「停止本回合」和滚动对话都点不了。
+    ///   改成事件后，调用方在 Show 之后照样拿得到结果。
+    /// </summary>
+    public event Action<bool, bool>? Decided;
+
+    private void RaiseDecided(bool approved, bool allowForSession)
+    {
+        Approved = approved;
+        AllowForSession = allowForSession;
+        Decided?.Invoke(approved, allowForSession);
+        Close();
+    }
+
     public ApprovalWindow(ApprovalRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -173,10 +192,8 @@ public partial class ApprovalWindow : Window
         {
             if (string.Equals(box.Password, expected, StringComparison.Ordinal))
             {
-                Approved = true;
-                AllowForSession = false;      // 口令只放行这一次，不累积成「本会话全放行」
-                DialogResult = true;
-                Close();
+                // 口令只放行这一次，不累积成「本会话全放行」
+                RaiseDecided(true, false);
             }
             else
             {
@@ -186,13 +203,7 @@ public partial class ApprovalWindow : Window
             }
         };
 
-        cancelButton.Click += (_, _) =>
-        {
-            Approved = false;
-            AllowForSession = false;
-            DialogResult = false;
-            Close();
-        };
+        cancelButton.Click += (_, _) => RaiseDecided(false, false);
 
         Loaded += (_, _) => box.Focus();
 
@@ -222,18 +233,8 @@ public partial class ApprovalWindow : Window
     }
 
     private void OnAllow(object sender, RoutedEventArgs e)
-    {
-        Approved = true;
-        AllowForSession = SessionCheck.IsChecked == true;
-        DialogResult = true;
-        Close();
-    }
+        => RaiseDecided(true, SessionCheck.IsChecked == true);
 
     private void OnDeny(object sender, RoutedEventArgs e)
-    {
-        Approved = false;
-        AllowForSession = false;
-        DialogResult = false;
-        Close();
-    }
+        => RaiseDecided(false, false);
 }

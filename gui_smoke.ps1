@@ -5,12 +5,14 @@
 $ErrorActionPreference = 'Stop'
 
 $dotnet = Join-Path $env:LOCALAPPDATA 'Microsoft\dotnet\dotnet.exe'
-$dll = 'src\FatFish.App\bin\Debug\net10.0-windows\FatFish.dll'
+# 2026-11-20：$dll 原来是相对路径，只有 cwd == 仓库根时才找得到；
+# 工作区原来取 $PSScriptRoot\..（仓库外），现在都锚到脚本所在目录（= 仓库根）。
+$dll = Join-Path $PSScriptRoot 'src\FatFish.App\bin\Debug\net10.0-windows\FatFish.dll'
 
 if (-not (Test-Path $dotnet)) { Write-Output "NO_DOTNET"; exit 1 }
 if (-not (Test-Path $dll))    { Write-Output "NO_DLL";    exit 1 }
 
-$env:FATFISH_WORKSPACE = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$env:FATFISH_WORKSPACE = (Resolve-Path $PSScriptRoot).Path
 
 $p = Start-Process -FilePath $dotnet -ArgumentList $dll -PassThru
 Write-Output ("STARTED pid=" + $p.Id)

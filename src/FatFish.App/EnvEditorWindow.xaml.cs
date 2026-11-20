@@ -52,6 +52,12 @@ public partial class EnvEditorWindow : Window
     /// <summary>用户点了「保存并重启」。主窗口读这个标志决定要不要重启。</summary>
     public bool RestartRequested { get; private set; }
 
+    /// <summary>
+    /// 这一次窗口存在期间是否成功保存过。
+    /// 非模态之后主窗口拿不到 ShowDialog 的返回值了，所以由窗口自己记着。
+    /// </summary>
+    public bool Saved { get; private set; }
+
     public EnvEditorWindow(string envPath, string? backupDirectory = null)
     {
         InitializeComponent();
@@ -937,6 +943,8 @@ public partial class EnvEditorWindow : Window
             StatusText.Text = backup is null
                 ? $"✅ 已保存（原本没有文件，这次是新建）。{what}。重启程序后生效。"
                 : $"✅ 已保存：{what}。原文件备份在 {backup}  —— 改错了就把它改名回 .env。重启后生效。";
+
+            Saved = true;
 
             if (restart)
             {

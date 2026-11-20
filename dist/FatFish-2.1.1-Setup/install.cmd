@@ -1,6 +1,6 @@
 @echo off
 setlocal
-title FatFish 2.0.1 - Setup
+title FatFish 2.1.1 - Setup
 rem ------------------------------------------------------------
 rem  FatFish installer launcher.
 rem  Keep this file pure ASCII + CRLF: cmd.exe miscounts bytes

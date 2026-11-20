@@ -1,5 +1,5 @@
 ﻿<#
-  FatFish 启动器 2.0.1 —— 安装程序
+  FatFish 启动器 2.1.1 —— 安装程序
   不需要管理员权限：全部装在当前用户目录下。
 #>
 param(
@@ -10,7 +10,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $AppName   = 'FatFish'
-$Version   = '2.0.1'
+$Version   = '2.1.1'
 $Publisher = 'FatFish'
 $Payload   = Join-Path $PSScriptRoot 'payload'
 $ExeName   = 'FatFish.exe'
@@ -62,7 +62,7 @@ if (-not $hasRuntime) {
     Info '本程序是「框架依赖版」，必须先装运行时才能运行。'
     Info ''
     Info '请这样做：'
-    Info '  1. 找到另一个包：FatFish-2.0.1-Deps-dotnet10'
+    Info '  1. 找到另一个包：FatFish-2.1.1-Deps-dotnet10'
     Info '  2. 解压后双击里面的 install-deps.cmd（需要联网，约 55 MB，不需要管理员权限）'
     Info '  3. 装完后重新双击本安装器的 install.cmd'
     Info ''
@@ -88,7 +88,7 @@ if (Test-Path $Dir) {
 }
 
 Copy-Item (Join-Path $Payload $ExeName) (Join-Path $Dir $ExeName) -Force
-foreach ($extra in @('README.md')) {
+foreach ($extra in @('README.md','LICENSE','NOTICE')) {
     $src = Join-Path $Payload $extra
     if (Test-Path $src) { Copy-Item $src (Join-Path $Dir $extra) -Force }
 }

@@ -9,20 +9,60 @@ namespace FatFish.Core.Agent;
 /// <summary>编排层配置。</summary>
 public sealed class AgentOptions
 {
-    /// <summary>单轮用户输入内，最多允许几轮「模型 ↔ 工具」往返。</summary>
-    public int MaxRounds { get; init; } = 25;
+    /// <summary>
+    /// 单轮用户输入内，最多允许几轮「模型 ↔ 工具」往返。
+    /// </summary>
+    /// <remarks>
+    /// ★ 2026-11-06 起语义是 <b>可选覆盖</b>：
+    ///   <c>&lt;= 0</c>（默认）＝ 听 <see cref="ApprovalPolicy.RoundLimit"/> 的，
+    ///   也就是顶栏「审批」栏里那个可运行时切换的上限（15 / 25 / 35 / 50 / 100 / 不限）。
+    ///   <c>&gt; 0</c> ＝ 构造期硬上限，压过策略。
+    ///
+    /// ★ 为什么保留这个「硬上限」而不是干脆删掉：
+    ///   CLI 与单测不接 UI，也不该被某台机器上的用户偏好影响 ——
+    ///   一条「跑 4 轮必然撞顶」的测试如果哪天被人把偏好改成 100，
+    ///   就会挂在一个和它要验证的东西完全无关的地方。
+    /// </remarks>
+    public int MaxRounds { get; init; }
 
-    /// <summary>单条工具结果回填给模型的字符上限（超出截断）。</summary>
-    public int MaxToolResultChars { get; init; } = 30_000;
+    /// <summary>
+    /// 单条工具结果回填给模型的字符上限（超出则**头尾各留一半**，不是只留头）。
+    /// </summary>
+    /// <remarks>
+    /// ★ 2026-11-05 从 30_000 提到 100_000。
+    ///   原先那个数是在「窗口紧张、只能省着用」的前提下定的；
+    ///   而 deepseek-flash（V4.1-Flash）的窗口是 1M、历史预算 550K ——
+    ///   一条工具结果占 10 万字符（中文约 3 万 token）完全放得下，
+    ///   没必要让模型带着残缺信息干活。
+    /// ★ 仍保留上限：`dotnet build` 的完整日志能有几 MB，
+    ///   无上限等于让一次工具调用把整个窗口挤爆。
+    ///   完整内容由工具自己落盘并提供 full_output 路径，模型按需去取。
+    /// </remarks>
+    public int MaxToolResultChars { get; init; } = 100_000;
 
-    /// <summary>历史保留的最大条数（超出后从最早的成对消息开始丢）。</summary>
-    public int MaxHistoryMessages { get; init; } = 200;
+    /// <summary>
+    /// 历史保留的 token 预算（按 <see cref="ChatMessage.EstimateTokens"/> 粗略估算）。
+    /// <c>0</c> = 不按 token 裁剪。
+    /// </summary>
+    /// <remarks>
+    /// ★ 2026-11-05：条数上限（原 <c>MaxHistoryMessages = 200</c>）已撤除，只认 token。
+    ///   理由：条数不是资源。200 条可能是 5k token，也可能是 600 万字符 ——
+    ///   同一个数字对应两种极端，按它裁决必然一边浪费一边爆窗。
+    /// ★ 默认 550000：一轮实测 300K 上下文的会话说明正常用量远低于此，
+    ///   它实际等于「不裁」，只在极长会话或一次性灌入超大文件时兜底。
+    ///   与输出上限相加仍在 deepseek-flash 的 1M 窗口内（550K + 262K + 系统提示 ≈ 815K）。
+    /// ★ 可用环境变量 <c>FATFISH_MAX_HISTORY_TOKENS</c> 覆盖。
+    /// </remarks>
+    public int MaxHistoryTokens { get; init; } = ReadInt("FATFISH_MAX_HISTORY_TOKENS", 550_000);
 
     /// <summary>是否在日志里打印每一轮的摘要。</summary>
     public bool Verbose { get; init; }
 
     /// <summary>系统提示词。</summary>
     public string SystemPrompt { get; init; } = DefaultSystemPrompt;
+
+    private static int ReadInt(string name, int fallback)
+        => int.TryParse(Environment.GetEnvironmentVariable(name), out var v) ? v : fallback;
 
     public const string DefaultSystemPrompt =
         "你是 FatFish，一条运行在用户命令行里的蓝色大肥鱼。你能读写文件、执行命令与代码。\n" +
@@ -138,14 +178,21 @@ public sealed record AgentTraceEntry
 /// </summary>
 public sealed class AgentLoop
 {
-    private readonly DeepSeekClient _llm;
+    /// <summary>
+    /// 当前在用的模型客户端。
+    ///
+    /// ★ 为什么不是 readonly（2026-11-06）：热重载要能在**不重建 AgentLoop**的前提下换掉它。
+    ///   重建 AgentLoop 会丢掉历史、会话订阅和累计用量 —— 「换个模型」不该等于「开新会话」。
+    ///   所以历史/计数器留在这里，只有「往哪发请求」这一件事被换掉。
+    /// </summary>
+    private DeepSeekClient _llm;
     private readonly ToolRegistry _tools;
     private readonly ToolContext _context;
     private readonly AgentOptions _options;
     private readonly ApprovalPolicy _policy;
 
     /// <summary>双人核验（第二位 AI 审查员）。为 null 或关闭时只剩人工报批一道闸。</summary>
-    private readonly VerifySession? _verify;
+    private VerifySession? _verify;
 
     /// <summary>用户即时命令记录 —— 送审材料里唯一「模型无法伪造」的一段。</summary>
     private readonly UserEventLog? _userEvents;
@@ -183,6 +230,23 @@ public sealed class AgentLoop
     }
 
     public IReadOnlyList<ChatMessage> History => _history;
+
+    /// <summary>当前在用的模型客户端（热重载后更换）。</summary>
+    public DeepSeekClient Llm => _llm;
+
+    /// <summary>
+    /// 换一个模型客户端，<b>不动历史、不动用量、不通知会话</b>。
+    ///
+    /// 调用时机：热重载配置之后（见 <c>EnvRuntime.Reload</c>）。
+    /// 安全边界：本方法只保证「下一次请求走新的客户端」；
+    /// 正在生成的那一轮仍在用旧客户端跑完 —— 那是刻意的，
+    /// 中途换掉会让同一条回答前后来自两个模型，比不换更糟。
+    /// </summary>
+    public void SwapLlm(DeepSeekClient llm)
+        => _llm = llm ?? throw new ArgumentNullException(nameof(llm));
+
+    /// <summary>换掉审查员（热重载后 VERIFIER_* 变了时用）。传 null = 关闭核验。</summary>
+    public void SwapVerify(VerifySession? verify) => _verify = verify;
 
     /// <summary>
     /// 每有一条消息进入历史就触发一次。
@@ -246,10 +310,37 @@ public sealed class AgentLoop
             loaded++;
         }
 
-        // 恢复的历史可能超过 MaxHistoryMessages，直接走一次裁剪，避免下一次请求就超窗。
+        // 恢复的历史可能已经超过 token 预算，直接走一次裁剪，避免下一次请求就超窗。
         TrimHistory();
 
         return loaded;
+    }
+
+    /// <summary>
+    /// 直接往历史里塞一段「用户侧上下文」，不触发模型回合。
+    /// </summary>
+    /// <remarks>
+    /// 用途：宿主把文件原文 / 文件摘要放进上下文，但不想立刻花一次模型调用、
+    /// 也不想让模型马上开口说话。走和 RunAsync 同一条 Traced 落盘路径，
+    /// 所以会话恢复时这段内容还在。
+    ///
+    /// ★ 只追加 user 消息：历史末尾若停在 assistant(tool_calls) 上再插 user，
+    ///   下一次请求会被服务端以「tool 必须紧跟 tool_calls」拒绝。
+    ///   调用方（界面）只在回合结束、不在运行中时才会走到这里。
+    /// </remarks>
+    /// <returns>注入后的历史条数。</returns>
+    public int InjectContext(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return _history.Count;
+
+        var message = ChatMessage.User(text);
+
+        _history.Add(message);
+        Traced?.Invoke(new AgentTraceEntry { Message = message });
+        TrimHistory();
+
+        return _history.Count;
     }
 
     // ------------------------------------------------------------------
@@ -290,8 +381,22 @@ public sealed class AgentLoop
         var toolCallCount = 0;
         LlmUsage? lastUsage = null;
 
-        for (var round = 0; round < _options.MaxRounds; round++)
+        // ★ 上限每轮重新读一次：用户可以在跑到一半时从顶栏「审批」栏改
+        //   （15 / 25 / 35 / 50 / 100 / 不限），下一轮立刻按新值判断 ——
+        //   与审批档位同一套「运行时可变」的理由。
+        //   MaxRounds > 0 时是构造期硬上限（CLI / 单测用），压过策略。
+        var roundLimitHit = 0;
+
+        for (var round = 0; ; round++)
         {
+            var limit = EffectiveRoundLimit();
+
+            if (limit > 0 && round >= limit)
+            {
+                roundLimitHit = limit;
+                break;
+            }
+
             ct.ThrowIfCancellationRequested();
 
             rounds = round + 1;
@@ -315,6 +420,26 @@ public sealed class AgentLoop
             }
             catch (LlmException ex)
             {
+                // ★ 失败要写进历史，否则下一轮模型以为上一轮是正常结束的。
+                //   一行就够：只报「失败了 + 为什么」，不往历史里灌提示词。
+                //   合并进最后一条 user/tool 而不是新增，是为了避免连续两条 user。
+                var failureNotice = $"[系统通知] 上一轮调用失败：{ex.Message}";
+
+                if (_history.Count > 0 && _history[^1].Role is "user" or "tool")
+                {
+                    var lastMessage = _history[^1];
+                    _history[^1] = lastMessage with
+                    {
+                        Content = (lastMessage.Content ?? string.Empty) + "\n\n" + failureNotice,
+                    };
+                }
+                else
+                {
+                    var failureMessage = ChatMessage.User(failureNotice);
+                    _history.Add(failureMessage);
+                    Traced?.Invoke(new AgentTraceEntry { Message = failureMessage });
+                }
+
                 observer.OnStatus("模型调用失败：" + ex.Message);
                 throw;
             }
@@ -469,6 +594,18 @@ public sealed class AgentLoop
             TrimHistory();
         }
 
+        // 走到这里只有一种可能：循环被上限打断（limit > 0 且 round 已到）。
+        // 「不限轮数」时循环只会在 return / 异常 / 取消时离开，不会落到这里。
+        if (roundLimitHit > 0)
+        {
+            observer.OnStatus(
+                $"[上限] 已达本轮 {ApprovalPolicy.RoundLimitName(roundLimitHit)}上限，已停止。" +
+                "可在顶栏「审批」栏调高，或设为「不限轮数」后继续。");
+
+            _context.Log?.Invoke(
+                $"[上限] 单轮回合数达到 {roundLimitHit}（顶栏「审批」栏可改）");
+        }
+
         return new AgentRunResult
         {
             FinalText = lastText.ToString(),
@@ -478,6 +615,17 @@ public sealed class AgentLoop
             StopReason = "round_limit",
         };
     }
+
+    /// <summary>
+    /// 本次实际生效的回合上限：<see cref="AgentOptions.MaxRounds"/> &gt; 0 时用它（构造期硬上限），
+    /// 否则听 <see cref="ApprovalPolicy.RoundLimit"/>（顶栏可改，0 = 不限）。
+    /// </summary>
+    /// <remarks>
+    /// ★ 做成方法而不是构造时算一次：上限是运行时偏好，
+    ///   在构造期定死就等于「改完必须重启」—— 那正是这个功能要避免的。
+    /// </remarks>
+    private int EffectiveRoundLimit()
+        => _options.MaxRounds > 0 ? _options.MaxRounds : _policy.RoundLimit;
 
     // ------------------------------------------------------------------
     // 双人核验
@@ -524,6 +672,12 @@ public sealed class AgentLoop
         observer.OnStatus(
             $"🧿 双人核验中：{picks.Count} 个动作（审查员 {_verify.Options.Endpoint.Model}）…");
 
+        // ★ 按业务分域（2026-11-05）：决定这一批**送哪些材料**、以及给审查员**哪一套判据**。
+        //   原来每一批都送同一套素材（含几千字的近期上下文），不管这批是要删文件还是搜资料 ——
+        //   既贵，又给了审查员多余的「可以自由发挥」的原料，那正是幻觉的来源。
+        var profile = VerifyProfiles.For(
+            VerifyProfiles.Classify(picks.Select(p => (p.Name, p.Args)).ToList()));
+
         var request = new ReviewRequest
         {
             Actions = picks.Select(p => (p.Name, p.Args)).ToList(),
@@ -535,8 +689,11 @@ public sealed class AgentLoop
             // 审查员看得到这段，所以「计划里写着一套、动作里做着另一套」会被抓住。
             AiPlan = turn.Text,
 
-            ContextText = RecentContext(),
-            UserEvents = _userEvents?.Render() ?? string.Empty,
+            // ★ 不是「给不给上下文」，而是「给几条」：多轮任务里「用户到底要干什么」
+            //   经常不在最后一句里（先「看看目录结构」、再「把那个配置改一下」），
+            //   所以 Exec / FileWrite 各给最近 4 条，联网 2 条，动工作台本身 0 条。
+            ContextText = VerifyProfiles.LimitContext(RecentContextMessages(), profile),
+            UserEvents = profile.WantUserEvents ? (_userEvents?.Render() ?? string.Empty) : string.Empty,
             ExtraNote = _verify.BuildExtraNote(
                 _context.Guard.Root,
                 // ★ 这里**不参与放行判定**，它只生成一段送给审查员的文字：「本批有没有动作被免掉了人工确认」。
@@ -546,7 +703,11 @@ public sealed class AgentLoop
                 //   换成 All 会在混合批次下漏报「这一批里有东西没人批准过」，反而让监管变松。
                 _autoApprovedForSession || (_policy.Level != ApprovalLevel.Strict && picks.Exists(pk => !_policy.NeedsApproval(pk.Name, ToArgMap(pk.Args)).Need)),
                 AutoApproveScopeLabel(),
-                _policy.DescribeBypass()),
+                // 该域判据 + 读凭证覆盖率 一起塞进「送审上下文」那一节。
+                // 那一节在提示词里有 800 字符预算，所以三段都刻意写得很短。
+                profile.Instruction
+                + VerifyProfiles.CoverageNote(turn.ToolCalls, _context)
+                + _policy.DescribeBypass()),
         };
 
         var result = await _verify.ReviewAsync(request, ct).ConfigureAwait(false);
@@ -581,12 +742,15 @@ public sealed class AgentLoop
     }
 
     /// <summary>
-    /// 近期上下文摘要：截尾保近。
+    /// 近期上下文摘要：截尾保近，返回**逐条**消息。
     ///
     /// ★ 只取 user / assistant，跳过 system 与 tool —— tool 消息是一大坨 JSON，
     ///   塞进去会挤爆预算，而它对「用户想要什么」几乎不提供信息。
+    /// ★ 返回列表而不是拼接好的长串（2026-11-06 修正）：
+    ///   拼成串之后上层只能按 '\n' 切，无法区分「一条多行回答」和「几十条消息」，
+    ///   于是「按域只给 N 条上下文」会静默退化成「只给最后 N 行」。
     /// </summary>
-    private string RecentContext()
+    private List<string> RecentContextMessages()
     {
         const int maxMessages = 16;
         const int maxEach = 600;
@@ -612,7 +776,7 @@ public sealed class AgentLoop
 
         picked.Reverse();
 
-        return string.Join("\n", picked);
+        return picked;
     }
 
     /// <summary>一键放行档位的文字标签（送给审查员，让它知道「还有没有人兜底」）。</summary>
@@ -704,43 +868,126 @@ public sealed class AgentLoop
     // 历史维护
     // ------------------------------------------------------------------
 
-    /// <summary>
-    /// 裁剪历史。
-    ///
-    /// ★ 难点：assistant(tool_calls) 与随后的 tool 结果必须成组出现，
-    ///   从中间切开会让 API 报 "tool must follow tool_calls"。
-    ///   所以裁剪必须在「一条 user 消息」处下刀。
-    /// </summary>
-    private void TrimHistory()
+    /// <summary>一次裁剪的计划：从 <paramref name="Cut"/> 开始保留，前面 Cut-1 条被省略。</summary>
+    public readonly record struct TrimPlan(int Cut, int DroppedCount, int DroppedTokens)
     {
-        if (_history.Count <= _options.MaxHistoryMessages)
-            return;
+        public static TrimPlan None => new(1, 0, 0);
 
-        var overflow = _history.Count - _options.MaxHistoryMessages;
+        public bool Any => Cut > 1;
+    }
 
-        // 从索引 1（跳过 system）开始找第一个可以安全下刀的位置
-        var cut = 1;
-        for (var i = 1; i < _history.Count && overflow > 0; i++)
+    /// <summary>「已省略」声明的开头。用来识别「历史里已经有一条声明」，避免越堆越多。</summary>
+    internal const string OmittedNoticePrefix = "【已省略更早的";
+
+    /// <summary>
+    /// 纯函数：算出「从哪一条开始保留」。返回 Cut &lt;= 1 表示不需要裁剪。
+    /// </summary>
+    /// <remarks>
+    /// ★ 为什么是纯函数：裁剪的下刀点出过错（旧实现找的是「第一条 user」，
+    ///   而 <c>_history[1]</c> 恒为第一条 user，于是 <c>removed</c> 永远是 0 ——
+    ///   六个调用点每轮都在调，每一次都什么也没做，历史只增不减）。
+    ///   抽成纯函数之后，边界情况可以被单元测试直接钉住，不必等到线上撞墙。
+    /// ★ 唯一的硬约束是协议安全：assistant(tool_calls) 与随后的 tool 结果必须成组出现，
+    ///   所以下刀点只能落在「一条 user 消息」上。
+    ///   找不到安全落点时返回 None（宁可不裁），也绝不发出会引发
+    ///   "tool must follow tool_calls" 的非法请求。
+    /// </remarks>
+    public static TrimPlan PlanTrim(IReadOnlyList<ChatMessage> history, int maxTokens)
+    {
+        if (history.Count <= 1 || maxTokens <= 0)
+            return TrimPlan.None;
+
+        // 从最新往旧累加，累加爆掉的那一条之前，就是保留窗口的起点。
+        var target = 1;
+        var acc = 0;
+
+        for (var i = history.Count - 1; i >= 1; i--)
         {
-            if (_history[i].Role == "user")
+            acc += history[i].EstimateTokens();
+
+            if (acc > maxTokens)
             {
-                cut = i;
-                overflow -= (i - 1);
+                target = i + 1;
                 break;
             }
         }
 
-        // 找不到 user 边界（极端情况），保守地只删最早的一条 assistant+tool 整组
+        if (target <= 1)
+            return TrimPlan.None;
+
+        // 跳过既有的省略声明：它自己不该成为下刀点，否则声明会被一轮轮往前推。
+        while (target < history.Count && IsOmittedNotice(history[target]))
+            target++;
+
+        var cut = -1;
+
+        // 首选：第一条 user —— 在 user 处下刀，tool 消息永远不会与 tool_calls 分离。
+        for (var i = target; i < history.Count; i++)
+        {
+            if (history[i].Role == "user")
+            {
+                cut = i;
+                break;
+            }
+        }
+
+        // 兜底：历史里已经没有 user 了，退到「第一条不是 tool 的消息」。
+        if (cut < 0)
+        {
+            for (var i = target; i < history.Count; i++)
+            {
+                if (history[i].Role != "tool")
+                {
+                    cut = i;
+                    break;
+                }
+            }
+        }
+
         if (cut <= 1)
+            return TrimPlan.None;
+
+        var droppedTokens = 0;
+
+        for (var i = 1; i < cut; i++)
+            droppedTokens += history[i].EstimateTokens();
+
+        return new TrimPlan(cut, cut - 1, droppedTokens);
+    }
+
+    /// <summary>这条消息是不是我们自己插入的「已省略」声明。</summary>
+    private static bool IsOmittedNotice(ChatMessage m)
+        => m.Content is { Length: > 0 } text
+           && text.StartsWith(OmittedNoticePrefix, StringComparison.Ordinal);
+
+    /// <summary>
+    /// 按 token 预算裁剪历史。
+    /// </summary>
+    /// <remarks>
+    /// ★ 裁掉之后必须**告诉模型它忘了什么**：一条不声明的裁剪，
+    ///   换来的不是「省了一笔」，而是下一轮开始凭空编造「你之前说过……」。
+    ///   所以这里插入一条 user 消息，说明省略了多少条、原文在哪、以及「不要假装记得」。
+    ///   会话全文本来就落在 logs/sessions，模型可以用 ws_search 回去查 ——
+    ///   保住的是可及性，不是把它塞回上下文。
+    /// ★ 只保留一条声明：下一轮裁剪会把它一起删掉再插新的，不会累积。
+    /// </remarks>
+    private void TrimHistory()
+    {
+        var plan = PlanTrim(_history, _options.MaxHistoryTokens);
+
+        if (!plan.Any)
             return;
 
-        var removed = cut - 1;
-        if (removed <= 0)
-            return;
+        _history.RemoveRange(1, plan.Cut - 1);
 
-        _history.RemoveRange(1, removed);
+        _history.Insert(1, ChatMessage.User(
+            $"{OmittedNoticePrefix} {plan.DroppedCount} 条对话（约 {plan.DroppedTokens} tokens）。" +
+            "原文在 logs/sessions 的会话文件里；需要时用 ws_search 在那个文件里查关键词。" +
+            "不要假装记得被省略的内容。】"));
 
-        _context.Log?.Invoke($"[历史裁剪] 移除最早 {removed} 条消息，当前 {_history.Count} 条");
+        _context.Log?.Invoke(
+            $"[历史裁剪] 省略 {plan.DroppedCount} 条（约 {plan.DroppedTokens} tokens），" +
+            $"保留 {_history.Count} 条");
     }
 
     // ------------------------------------------------------------------
@@ -758,11 +1005,22 @@ public sealed class AgentLoop
             if (result.Data is { } data)
             {
                 var raw = data.GetRawText();
+
                 if (raw.Length > _options.MaxToolResultChars)
                 {
+                    // ★ 头尾各半，而不是只留头（2026-11-05 改）。
+                    //   尾部承载的是「结论」：退出码、traceback、汇总统计，
+                    //   以及工具新增的 full_output 路径 —— 它排在 JSON 末尾，
+                    //   只留头的话第一个被切掉的就是它。
+                    //   只留头会让模型把「一屏正常日志」读成「一切正常」，方向正好是反的。
+                    var half = _options.MaxToolResultChars / 2;
+
                     sb.Append(",\"data\":");
                     sb.Append(JsonSerializer.Serialize(
-                        raw[.._options.MaxToolResultChars] + "\n…（已截断）",
+                        raw[..half]
+                        + $"\n……（已省略 {raw.Length - half * 2:N0} 字符；"
+                        + "完整内容请用结果里的 full_output 路径查，或在原文件里 ws_search）……\n"
+                        + raw[^half..],
                         Tools.ToolJson.DefaultOptions));
                     sb.Append(",\"truncated\":true");
                 }

@@ -263,6 +263,41 @@ public sealed class UsageLedger
     }
 
     /// <summary>
+    /// 某后端在 <paramref name="since"/> 之后消耗的计费单位之和（失败调用 units=0，不计入）。
+    /// </summary>
+    /// <remarks>
+    /// ★ 用途是「余额的本地兜底」：官方接口查不动时，
+    ///   剩余 ≈ 上次查到的剩余 − UnitsSince(该后端, 上次查询时刻)。
+    ///   按 Units 求和而不是数行数 —— 一次 fetch 可能计多个页面，
+    ///   而失败的调用 units 已经是 0，按行数算会把失败也算成花费。
+    ///   读盘失败一律返回 0：兜底不该反过来把主功能搞坏。
+    /// </remarks>
+    public double UnitsSince(string backend, DateTimeOffset since)
+    {
+        try
+        {
+            var sum = 0.0;
+
+            foreach (var e in All())
+            {
+                if (e.Ts <= since)
+                    continue;
+
+                if (!string.Equals(e.Backend, backend, StringComparison.Ordinal))
+                    continue;
+
+                sum += e.Units;
+            }
+
+            return sum;
+        }
+        catch (Exception)
+        {
+            return 0;
+        }
+    }
+
+    /// <summary>
     /// 月度汇总。<paramref name="month"/> 为 <c>yyyy-MM</c>，null = 本月（本地时区）。
     /// </summary>
     public MonthSummary Summarize(string? month = null)

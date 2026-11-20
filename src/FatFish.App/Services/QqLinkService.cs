@@ -56,7 +56,7 @@ public sealed record QqTurnReply(string Text, bool Send);
 ///   否则写进去永远没人来取（旧版实测：插话在盘里躺了一整晚）。</item>
 /// <item>单条消息里的路径必须<b>在进模型之前</b>中和掉，只放行桥接落在
 ///   <c>data/link/media/</c> 里的真附件 —— 否则群里任何人打一行
-///   <c>@workspace\.env</c> 就能让我们把密钥读进上下文再贴进群。</item>
+///   <c>@E:\FATFISH\workspace\.env</c> 就能让我们把密钥读进上下文再贴进群。</item>
 /// </list>
 /// </summary>
 public sealed class QqLinkService : IAsyncDisposable
@@ -86,6 +86,9 @@ public sealed class QqLinkService : IAsyncDisposable
     private long _skipped;
     private string _lastError = "";
 
+    /// <summary>白名单 / 提示词 / 权限档。来自 link_settings.json，保存后调 ReloadSettings 即时生效。</summary>
+    private QqLinkSettings _settings = new();
+
     public QqLinkService(
         string root,
         Func<QqTurnRequest, CancellationToken, Task<QqTurnReply>> runTurn,
@@ -97,9 +100,26 @@ public sealed class QqLinkService : IAsyncDisposable
 
         _linkDir = Path.Combine(_root, "workspace", "qq_bridge", "data", "link");
         _mediaDir = Path.Combine(_linkDir, "media");
+
+        _settings = QqLinkSettings.Load(_root);
     }
 
     public bool Online => _online;
+
+    /// <summary>当前生效的设置（只读快照）。</summary>
+    public QqLinkSettings Settings => _settings;
+
+    /// <summary>设置窗口保存后调用：重读 json。不需要重启程序，下一条消息就按新设置判定。</summary>
+    public void ReloadSettings()
+    {
+        _settings = QqLinkSettings.Load(_root);
+
+        _log("[QQ] 设置已重载："
+             + (_settings.AllowUsers.Count == 0 ? "用户不限" : $"用户白名单 {_settings.AllowUsers.Count} 个")
+             + " / "
+             + (_settings.AllowGroups.Count == 0 ? "群不限" : $"群白名单 {_settings.AllowGroups.Count} 个")
+             + " / 权限 " + _settings.PermissionLevel);
+    }
 
     public string LinkDir => _linkDir;
 
@@ -307,7 +327,7 @@ public sealed class QqLinkService : IAsyncDisposable
 
             if (!TryReadRecord(file, out JsonDocument? doc, out string id, out string session,
                                out string text, out bool batch, out bool skip, out string who,
-                               out bool isGroup))
+                               out string userId, out string targetId, out bool isGroup))
             {
                 // 读不出来（半截文件 / 坏 JSON）：删掉，别让它永久堵住队列。
                 SafeDelete(file);
@@ -321,6 +341,19 @@ public sealed class QqLinkService : IAsyncDisposable
                 {
                     SafeDelete(file);
                     Interlocked.Increment(ref _skipped);
+                    continue;
+                }
+
+                // 白名单：不在名单里的消息不进模型（省一次调用，也不让它影响上下文）。
+                // 空名单 = 不限制 —— 升级前没有任何白名单，默认拒绝会让人以为桥接坏了。
+                // ★ 2026-11-01 修：判定必须用 QQ 号 / 群号，不能用 who —— who 是昵称，
+                //   和白名单里的数字永远对不上，结果是所有消息被静默删掉。
+                if (!_settings.Allows(userId, targetId, isGroup))
+                {
+                    SafeDelete(file);
+                    Interlocked.Increment(ref _skipped);
+                    _log($"[QQ] 白名单拦截：{(isGroup ? "群" : "私聊")} {who}"
+                         + $"（user={userId} target={targetId}）");
                     continue;
                 }
 
@@ -429,6 +462,8 @@ public sealed class QqLinkService : IAsyncDisposable
         out bool batch,
         out bool observeOnly,
         out string who,
+        out string userId,
+        out string targetId,
         out bool isGroup)
     {
         doc = null;
@@ -438,6 +473,8 @@ public sealed class QqLinkService : IAsyncDisposable
         batch = false;
         observeOnly = false;
         who = "?";
+        userId = "";
+        targetId = "";
         isGroup = true;
 
         try
@@ -456,7 +493,12 @@ public sealed class QqLinkService : IAsyncDisposable
             id = Str(r, "id") is { Length: > 0 } given ? given : id;
             session = Str(r, "session");
             text = Str(r, "text");
+
+            // who 只用于显示（渲染模板 + 日志）；白名单判定必须用下面两个真 id。
+            // 曾经这里只输出昵称、又拿它去比对白名单里的数字，结果消息全被静默丢弃。
             who = FirstNonEmpty(Str(r, "nickname"), Str(r, "user"), "?");
+            userId = Str(r, "user");
+            targetId = Str(r, "target");
             isGroup = Str(r, "kind") is not "private";
 
             batch = Bool(r, "passthrough") || Bool(r, "interject");
@@ -535,6 +577,20 @@ public sealed class QqLinkService : IAsyncDisposable
             _log($"[QQ] 已屏蔽正文里的 {blocked} 处路径/命令");
 
         sb.Append(SafetyRules);
+
+        // 用户设置的行为提醒（热情程度 / 称呼 / 禁区）：排在安全边界之后 ——
+        // 意思是「语气听用户的，底线不听」。
+        string prompt = _settings.Prompt;
+
+        if (!string.IsNullOrWhiteSpace(prompt))
+        {
+            sb.Append("\n\n【本通道的行为提醒（用户在插件设置里指定，优先级高于默认口吻、低于上面的安全边界）】\n");
+            sb.Append(prompt.Trim());
+            sb.Append('\n');
+        }
+
+        sb.Append(_settings.PermissionRules);
+
         return sb.ToString();
     }
 
@@ -584,7 +640,7 @@ public sealed class QqLinkService : IAsyncDisposable
     /// <para>
     /// 这是堵一个<b>真洞</b>，不是洁癖：模型解析 <c>@路径</c> 是自动的，
     /// 而那条路不经过工具审批。群里任何人打一句
-    /// <c>@workspace\.env</c>，就会把密钥读进上下文 —— 再被要求复述，就贴进群了。
+    /// <c>@E:\FATFISH\workspace\.env</c>，就会把密钥读进上下文 —— 再被要求复述，就贴进群了。
     /// </para>
     /// </summary>
     private (string Cleaned, int Blocked, List<string> Images) MediaGuard(string text)

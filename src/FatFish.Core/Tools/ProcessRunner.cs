@@ -393,7 +393,7 @@ public static class ProcessRunner
     }
 
     /// <summary>去掉 ANSI 转义、归一化换行、去掉尾部空行。</summary>
-    private static string Clean(string text)
+    internal static string Clean(string text)
     {
         if (text.Length == 0)
             return string.Empty;

@@ -14,6 +14,12 @@ namespace FatFish.Core.Tools.Web;
 /// ★ 它同时是「台账」的读取口：<c>logs/usage/net_usage.jsonl</c> 里记的每一次搜索
 ///   都在这里汇总成「本月用了几次、花了多少钱」。这样余额（官方接口）与花费（本地台账）
 ///   能互相对照 —— 两者对不上时，通常意味着有人用同一个 key 在别处跑了东西。
+///
+/// ★ 2026-11-05 两处改动：
+///   1. 台账改为**先打开**并交给 BalanceService —— Tavily 的 /usage 查不通时，
+///      它会按台账估算余额（剩余 = 上次查到 − 之后用掉的 credit），结果带 Estimated 标记。
+///   2. Tavily 那一行不再打印百分比，与状态栏口径一致：只说「还剩 N」。
+///      百分比在这个粒度上没有信息量，反而把 DeepSeek 的金额挤小。
 /// </summary>
 public sealed class NetBalanceTool : ITool
 {
@@ -41,20 +47,14 @@ public sealed class NetBalanceTool : ITool
         var month = args.GetString("month");
         var refresh = args.GetBool("refresh", false);
 
-        // ---- 1. 官方余额（并发查两个后端，默认走 60 秒缓存）----
-        var svc = new BalanceService();
-        var snap = await svc.FetchAsync(force: refresh, ct: ct).ConfigureAwait(false);
-
-        // 分级要由 svc 算：阈值可以被 .env 覆盖（NETBAL_DS_WARN 等）
-        var (dsLevel, tvLevel, _) = snap.Grade(svc);
-
-        // ---- 2. 本地台账 ----
+        // ---- 0. 台账先开：余额查询要用它做 Tavily 查不通时的本地兜底 ----
+        UsageLedger? ledger = null;
         MonthSummary? summary = null;
         string? ledgerPath = null;
 
         try
         {
-            var ledger = UsageLedger.Open(context.Guard.Root);
+            ledger = UsageLedger.Open(context.Guard.Root);
             summary = ledger.Summarize(month);
             ledgerPath = context.Guard.ToRelative(ledger.FilePath);
         }
@@ -63,13 +63,21 @@ public sealed class NetBalanceTool : ITool
             context.Log?.Invoke("[台账] 读取失败（不影响余额查询）：" + ex.Message);
         }
 
+        // ---- 1. 官方余额（并发查两个后端，默认走 60 秒缓存）----
+        var svc = new BalanceService(ledger: ledger);
+        var snap = await svc.FetchAsync(force: refresh, ct: ct).ConfigureAwait(false);
+
+        // 分级要由 svc 算：阈值可以被 .env 覆盖（NETBAL_DS_WARN 等）
+        var (dsLevel, tvLevel, _) = snap.Grade(svc);
+
         var lines = new List<string>
         {
             $"DeepSeek 余额：{(snap.DeepSeek.Ok ? $"¥{snap.DeepSeek.Total:0.00}" : "查询失败")}" +
             $"（{BalanceService.LevelIcon(dsLevel)} {BalanceService.LevelText(dsLevel)}）" +
             (snap.DeepSeek.Ok ? $"，其中赠送 ¥{snap.DeepSeek.Granted:0.00} / 充值 ¥{snap.DeepSeek.ToppedUp:0.00}" : string.Empty),
 
-            $"Tavily 额度：{(snap.Tavily.Ok && snap.Tavily.Left is { } left ? $"{left} 剩余（{snap.Tavily.LeftPct:0.#}%）" : "查询失败")}" +
+            $"Tavily 额度：{(snap.Tavily.Ok && snap.Tavily.Left is { } left ? $"{left} 剩余" : "查询失败")}" +
+            (snap.Tavily.Estimated ? "（⚠ 本地估算：官方接口本次没查通）" : string.Empty) +
             $"（{BalanceService.LevelIcon(tvLevel)} {BalanceService.LevelText(tvLevel)}）" +
             (snap.Tavily.Ok ? $"，计划 {snap.Tavily.Plan}，已用 search {snap.Tavily.SearchUsage} / extract {snap.Tavily.ExtractUsage}" : string.Empty),
         };
@@ -78,7 +86,8 @@ public sealed class NetBalanceTool : ITool
             lines.Add("DeepSeek 错误：" + snap.DeepSeek.Error);
 
         if (snap.Tavily.Error is not null)
-            lines.Add("Tavily 错误：" + snap.Tavily.Error);
+            lines.Add((snap.Tavily.Estimated ? "Tavily 官方接口错误（已按台账估算）：" : "Tavily 错误：")
+                      + snap.Tavily.Error);
 
         if (summary is not null)
         {
@@ -119,6 +128,7 @@ public sealed class NetBalanceTool : ITool
             {
                 ok = snap.Tavily.Ok,
                 level = tvLevel.ToString().ToLowerInvariant(),
+                estimated = snap.Tavily.Estimated,
                 plan = snap.Tavily.Plan,
                 plan_limit = snap.Tavily.PlanLimit,
                 plan_used = snap.Tavily.PlanUsed,

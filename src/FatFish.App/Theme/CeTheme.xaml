@@ -375,6 +375,36 @@
 
     <!-- ==================== 输入框（下凹） ==================== -->
 
+        <!--
+      ★ 2026-11-02：可选中的只读正文（对话消息用）。
+        上面的隐式 TextBox 样式带三层下凹边框，而 ControlTemplate 里的 BorderThickness
+        是写死的 —— 在元素上写 BorderThickness="0" 盖不住，气泡就全变成一个个小方框。
+        所以这里单独给一套「无边框、无背景、无内边距」的模板，观感和 TextBlock 一致，
+        但支持拖选与 Ctrl+C。下一步（同一个改动里）会把这个 Style 挂到消息正文上。
+    -->
+    <Style x:Key="CeSelectableText" TargetType="TextBox">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource FgPrimary}" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="IsReadOnly" Value="True" />
+        <Setter Property="IsTabStop" Value="False" />
+        <Setter Property="Cursor" Value="IBeam" />
+        <Setter Property="SelectionBrush" Value="{DynamicResource SelBack}" />
+        <Setter Property="SelectionOpacity" Value="0.6" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="TextBox">
+                    <ScrollViewer x:Name="PART_ContentHost"
+                                  Background="Transparent"
+                                  Focusable="False"
+                                  HorizontalScrollBarVisibility="Hidden"
+                                  VerticalScrollBarVisibility="Hidden" />
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <Style TargetType="TextBox">
         <Setter Property="FontFamily" Value="{StaticResource UiFont}" />
         <Setter Property="FontSize" Value="13" />
