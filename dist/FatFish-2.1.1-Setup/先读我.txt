@@ -5,7 +5,7 @@
 
 如果你想连"运行时"都不用管，到这里就够了 —— install.cmd 会：
   · 检查电脑上有没有 .NET 10 桌面运行时（Microsoft.WindowsDesktop.App 10.x）
-  · 没有的话，当场下载并装上（约 39 MB 压缩包，装到
+  · 没有的话，当场下载并装上（两个包合计约 75 MB，装到
     %LOCALAPPDATA%\Microsoft\dotnet，不需要管理员权限，不改系统 PATH）
   · 已经有了就跳过，只装程序本体
 所以：只需要联网，不需要你提前装任何东西。
@@ -30,14 +30,19 @@
 
 完全没网怎么办
 ----------------------------------------------------
-找一台能上网的机器下这个文件（约 39 MB）：
-    https://aka.ms/dotnet/10.0/windowsdesktop-runtime-win-x64.zip
-拷过来解压，把里面的内容放进
-    %LOCALAPPDATA%\Microsoft\dotnet
-（解压后应能看到 dotnet.exe、host\、shared\ 三个东西）
+最省事：直接装官方安装包（一个 exe，装完就齐了）
+    https://dotnet.microsoft.com/download/dotnet/10.0
+    选「.NET Desktop Runtime 10.x」→ Windows x64
 然后再双击 install.cmd。
-也可以直接装官方安装包：https://dotnet.microsoft.com/download/dotnet/10.0
-  选「.NET Desktop Runtime 10.x」→ Windows x64
+
+手工放文件的话，需要**两个** zip（缺一个都跑不起来）：
+    1. https://aka.ms/dotnet/10.0/dotnet-runtime-win-x64.zip        （约 37 MB）
+    2. https://aka.ms/dotnet/10.0/windowsdesktop-runtime-win-x64.zip（约 39 MB）
+两个都解压，内容都放进
+    %LOCALAPPDATA%\Microsoft\dotnet
+放好之后这个目录里应该有：dotnet.exe、host\、shared\
+（shared\ 下要有 Microsoft.NETCore.App 和 Microsoft.WindowsDesktop.App）
+然后再双击 install.cmd。
 
 卸载
 ----------------------------------------------------

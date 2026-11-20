@@ -75,17 +75,12 @@ function Test-DesktopRuntime($dotnetExe) {
     } catch { return $false }
 }
 
-# 拿「该下哪个 zip」。
-#
+# 运行时包地址（两个，见下方下载处的说明）。
+# ★ 为什么用 aka.ms 而不是自己拼版本号：
+#   实测它 302 到当前 10.0 的最新补丁（今日 10.0.15），curl -L 与 WebClient 都会自动跟随；
+#   比「先去读 productVersion.txt」稳（那条路径实测 BlobNotFound）。
 # ★ 为什么不解析 dotnet-install.ps1 -DryRun 的输出：
-#   它用 Write-Host 打印，而 Write-Host 在 PS 5.1 里绕过所有流（2>&1 也抓不到），
-#   想抓只能重定向整个进程，代价远大于收益。
-# ★ 为什么用 aka.ms：
-#   实测它 302 到当前 10.0 的最新补丁（今天解析到 10.0.15），curl -L 与 WebClient
-#   都会自动跟随重定向；比「先去读 productVersion.txt」稳（那条路径实测是 BlobNotFound）。
-function Get-RuntimeZipUrl {
-    return 'https://aka.ms/dotnet/10.0/windowsdesktop-runtime-win-x64.zip'
-}
+#   它用 Write-Host 打印，而 Write-Host 在 PS 5.1 里绕过所有流（2>&1 也抓不到）。
 
 # 1) curl.exe：绝大多数 Win10 1803+ 自带，速度最好
 function Get-FileWithCurl {
@@ -134,9 +129,8 @@ else {
     Warn '这台电脑上没有 .NET 10 桌面运行时（Microsoft.WindowsDesktop.App 10.x）。'
     Info '本程序是「框架依赖版」：体积小，但要靠这个运行时运行。'
     Info ''
-    Info '现在会自动下载并安装它：'
-    Info '  · 来源：微软官方 CDN（builds.dotnet.microsoft.com）'
-    Info '  · 大小：约 39 MB 压缩包'
+    Info '现在会自动下载并安装它（微软官方 CDN）'
+    Info '  · 两个包合计约 75 MB（dotnet-runtime 37 MB + windowsdesktop 39 MB）'
     Info "  · 位置：$RuntimeDir"
     Info '  · 不需要管理员权限，不改系统 PATH，不影响其它 .NET 程序'
     Info '  · 需要联网'
@@ -165,27 +159,41 @@ else {
     }
 
     Write-Host ''
-    Info '正在下载运行时 …（约 39 MB，网速慢时要几分钟，别关窗口）'
+    Info '正在下载运行时 …（两个包合计约 75 MB，网速慢时要十几分钟，别关窗口）'
 
-    $zipUrl = Get-RuntimeZipUrl $depsScript
-    $tmpZip = Join-Path $env:TEMP ('fatfish-runtime-' + [Guid]::NewGuid().ToString('N').Substring(0, 8) + '.zip')
-    $downloaded = $false
+    # ★ 官方运行时是**两个**包，缺一不可（2026-11-20 实测）：
+    #     dotnet-runtime-*.zip        37 MB  → dotnet.exe / host\fxr / shared\Microsoft.NETCore.App
+    #     windowsdesktop-runtime-*.zip 39 MB  → 只有 shared\Microsoft.WindowsDesktop.App
+    #   只解压后者，机器上连 dotnet.exe 都没有，程序起不来。
+    $packages = @(
+        @{ Name = 'dotnet-runtime'; Url = 'https://aka.ms/dotnet/10.0/dotnet-runtime-win-x64.zip' },
+        @{ Name = 'windowsdesktop'; Url = 'https://aka.ms/dotnet/10.0/windowsdesktop-runtime-win-x64.zip' }
+    )
 
-    Info "  地址：$zipUrl"
-    $downloaded = Get-FileWithCurl $zipUrl $tmpZip
-    if (-not $downloaded) {
-        Info '  curl 没成功，换 .NET 下载器再试 …'
-        $downloaded = Get-FileWithWebClient $zipUrl $tmpZip
-    }
+    $allOk = $true
+    foreach ($pkg in $packages) {
+        Info "  下载 $($pkg.Name) → $($pkg.Url)"
+        $tmpZip = Join-Path $env:TEMP ('fatfish-' + $pkg.Name + '-' + [Guid]::NewGuid().ToString('N').Substring(0, 8) + '.zip')
 
-    if ($downloaded) {
-        Info '下载完成，正在解压 …'
+        $ok = Get-FileWithCurl $pkg.Url $tmpZip
+        if (-not $ok) {
+            Info '    curl 没成功，换 .NET 下载器再试 …'
+            $ok = Get-FileWithWebClient $pkg.Url $tmpZip
+        }
+        if (-not $ok) {
+            Warn "    $($pkg.Name) 下载失败。"
+            $allOk = $false
+            break
+        }
+
+        Info "  解压 $($pkg.Name) …"
         New-Item -ItemType Directory -Force -Path $RuntimeDir | Out-Null
         Expand-Archive -Path $tmpZip -DestinationPath $RuntimeDir -Force
         Remove-Item $tmpZip -Force -ErrorAction SilentlyContinue
     }
-    else {
-        Warn '直接下载没成功，改用微软官方脚本再试一次 …'
+
+    if (-not $allOk) {
+        Warn '自己下载没全成功，改用微软官方脚本再试一次 …'
         Write-Host ''
         & $depsScript -Channel '10.0' -Runtime 'windowsdesktop' -InstallDir $RuntimeDir -NoPath
         Write-Host ''
@@ -203,8 +211,10 @@ else {
         Info ''
         Info '手动装（任选一种），然后再双击 install.cmd：'
         Info '  · https://dotnet.microsoft.com/download/dotnet/10.0'
-        Info '    选 “.NET Desktop Runtime 10.x” → Windows x64'
-        if ($zipUrl) { Info "  · 或直接下这个 zip 解压到 $RuntimeDir" ; Info "    $zipUrl" }
+        Info '    选 “.NET Desktop Runtime 10.x” → Windows x64（这个装完就齐了）'
+        Info "  · 或手动下这两个 zip 解压到 $RuntimeDir"
+        Info '    https://aka.ms/dotnet/10.0/dotnet-runtime-win-x64.zip'
+        Info '    https://aka.ms/dotnet/10.0/windowsdesktop-runtime-win-x64.zip'
         Info ''
         Info '安装已中止，程序本体尚未安装（运行时是它运行的前提）。'
         exit 2

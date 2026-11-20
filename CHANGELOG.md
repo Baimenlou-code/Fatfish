@@ -2022,4 +2022,67 @@ dotnet-install: Downloading "aka.ms" link https://builds.dotnet.microsoft.com/..
 
 体积口径同步修正：运行时 zip 实际 **39.1 MB**（原按 55 MB 估算，那是解压后的大小）。
 
+#### 23.16.2 又一个会让功能失效的发现：运行时是**两个**包
+
+把 39 MB 的 `windowsdesktop-runtime-10.0.15-win-x64.zip` 下完、解压、看内容：
+
+```
+zip entries = 287
+  shared/Microsoft.WindowsDesktop.App/10.0.15/.version
+  shared/Microsoft.WindowsDesktop.App/10.0.15/Accessibility.dll
+  ...
+顶层内容 = shared        ← 只有这一个
+```
+
+**没有 `dotnet.exe`、没有 `host\`、没有 `Microsoft.NETCore.App`。**
+
+也就是说上一版「解压完就能跑」的假设是错的：在真正没装 .NET 的机器上，
+解压完这个包之后仍然起不来 —— 而那种机器恰恰是这条功能唯一要服务的对象。
+（在有 .NET 的机器上测不出来，因为 `Find-Dotnet` 会先找到系统那份，测试全绿。）
+
+正确的组合是两个包：
+
+| 包 | 大小 | 提供 |
+|---|---|---|
+| `dotnet-runtime-win-x64.zip` | **36.98 MB** | `dotnet.exe`、`host\fxr\10.0.15\`、`shared\Microsoft.NETCore.App\10.0.15\` |
+| `windowsdesktop-runtime-win-x64.zip` | **39.17 MB** | `shared\Microsoft.WindowsDesktop.App\10.0.15\` |
+
+（用 HTTP Range 只取前 400 KB 解析 zip 本地文件头即可确认布局，不必下完整个包。）
+
+**口径修正，必须说清**：两包合计约 **75 MB**，比自包含单 exe 的 **65.6 MB 还大**。
+所以「缺就下载」这个方案的真实卖点是：
+
+- 对**已经装了 .NET 10** 的机器：只下 888 KB（自包含单 exe 要下 65.6 MB）
+- 对**没装**的机器：下 75 MB，比单 exe 多 9 MB，但装出来的是"系统里有 .NET"，
+  以后装别的 .NET 程序也不用再下
+
+如果只追求「下载最小」，自包含单 exe 仍然更优。两个资产都发才是正解。
+
+#### 23.16.3 端到端验证，顺手抓出「界面自称 2.0」
+
+两个包都下完之后，做了真正的端到端验证（不再只是「脚本能跑」）：
+
+1. 把两个 zip 解压到空目录 → 得到 `dotnet.exe`、`host\fxr\10.0.15`、
+   `shared\{Microsoft.NETCore.App, Microsoft.WindowsDesktop.App}` 各 10.0.15
+2. 跑 **这份新解压出来的** `dotnet.exe --list-runtimes` →
+   两条 10.0.15 都列出来了
+3. **只给这一个进程设 `DOTNET_ROOT`**，启动 `payload\FatFish.exe`
+   （即用刚装的运行时，而不是系统里那份 10.0.14）
+
+结果：窗口起来了、响应正常、`CloseMainWindow` 干净退出 `exit code 0`。
+
+但它的标题是 —— **`肥鱼 FatFish 2.0`**。
+
+`MainWindow.xaml` 的 `Title` 和「关于」对话框里各硬编码了一处 `2.0`，
+升到 2.1.1 之后界面一直自称 2.0。这种错不报错、不崩溃，只是持续误导。
+
+改法（不做「再写一遍 2.1.1」）：
+- 新增 `MainWindow.AppVersion`，读 `typeof(MainWindow).Assembly.GetName().Version`
+  （由 `Directory.Build.props` 的 `<Version>` 决定）
+- 构造函数里 `Title = "肥鱼 FatFish " + AppVersion`
+- 「关于」里同样拼接
+- XAML 的 `Title` 只留 `肥鱼 FatFish` 作基值
+
+重编后复测：标题变成 **`肥鱼 FatFish 2.1.1`**，仍是 exit 0。
+
 

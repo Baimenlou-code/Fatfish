@@ -1,7 +1,7 @@
 <Window x:Class="FatFish.App.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="肥鱼 FatFish 2.0"
+        Title="肥鱼 FatFish"
         Icon="/Assets/FatFish.ico"
         Height="820" Width="1180"
         MinHeight="520" MinWidth="820"

@@ -154,9 +154,28 @@ public partial class MainWindow : Window, INotifyPropertyChanged, IAgentObserver
     private AppearanceSettings _appearance = AppearanceSettings.Default;
     private bool _isRunning;
 
+    /// <summary>
+    /// 程序版本，取自程序集（由 Directory.Build.props 的 &lt;Version&gt; 决定）。
+    /// </summary>
+    /// <remarks>
+    /// ★ 为什么不再手写：标题栏与「关于」里原本各自硬编码着 "2.0"，
+    ///   升到 2.1.1 之后界面仍然自称 2.0 —— 版本号这种一次性信息写死在 UI 里，
+    ///   迟早会和 csproj 对不上，而且对不上的时候不会报错，只会误导用户。
+    /// </remarks>
+    public static string AppVersion
+    {
+        get
+        {
+            var v = typeof(MainWindow).Assembly.GetName().Version;
+            return v is null ? "?" : v.Major + "." + v.Minor + "." + v.Build;
+        }
+    }
+
     public MainWindow()
     {
         InitializeComponent();
+
+        Title = "肥鱼 FatFish " + AppVersion;
 
         MessageList.ItemsSource = _messages;
         LogList.ItemsSource = _logs;
@@ -2600,7 +2619,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged, IAgentObserver
     private void OnAbout(object sender, RoutedEventArgs e)
     {
         MessageBox.Show(this,
-            "肥鱼 FatFish 2.0（C# / .NET 10 重写版）\n\n"
+            "肥鱼 FatFish " + AppVersion + "（C# / .NET 10 重写版）\n\n"
             + "界面风格参照 Cheat Engine 7.5。\n"
             + "内核：" + KernelStatus + "\n"
             + "工作台：" + (_guard?.Root ?? "未加载") + "\n"
