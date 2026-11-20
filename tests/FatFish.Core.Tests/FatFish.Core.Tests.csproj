@@ -15,7 +15,7 @@
       3.x 主要面向 xunit.v3，虽然向下兼容 v2，但 2.8.2 是 v2 的经典稳定组合，
       在 net10.0 上验证过的成功率更高。等确实需要 xunit.v3 时再升。
     -->
-    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+    <PackageReference Include="xunit.runner.visualstudio" Version="4.0.1">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
