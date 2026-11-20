@@ -9,7 +9,7 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
-    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit" Version="2.9.3" />
     <!--
       runner 用 2.8.2 而不是 3.0.0：
       3.x 主要面向 xunit.v3，虽然向下兼容 v2，但 2.8.2 是 v2 的经典稳定组合，
