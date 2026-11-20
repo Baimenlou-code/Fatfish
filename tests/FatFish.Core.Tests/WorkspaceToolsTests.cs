@@ -485,7 +485,7 @@ public class WorkspaceToolsTests : IDisposable
     /// PowerShell 走 -EncodedCommand，引号与中文都不该出问题。
     /// 这是「命令里带引号」这个经典坑的守门测试。
     /// </summary>
-    [Fact]
+    [CjkFact]
     public async Task WsRunCmd_PowerShellHandlesQuotesAndChinese()
     {
         var data = Data(await Call("ws_run_cmd",
@@ -752,7 +752,7 @@ public class WorkspaceToolsTests : IDisposable
     // ProcessEncoding 单元测试
     // ==================================================================
 
-    [Fact]
+    [CjkFact]
     public void ProcessEncoding_DecodesGbk()
     {
         // GBK 的「工作台」—— 简中 Windows 上 cmd 内建命令就是这种字节

@@ -261,6 +261,10 @@ public class NetProviderTests
     [Fact]
     public async Task Balance_PicksCnyBalance()
     {
+        // 这条测的是「多币种里挑 CNY」的解析逻辑，不测「本机有没有配 key」。
+        // 不注入假 key 的话，CI（无 key）会直接拿到 Ok=false。
+        using var key = EnvScope.Set("FATFISH_API_KEY", "sk-test-0000000000000000000000000000");
+
         const string json = """
         {
           "is_available": true,
@@ -285,6 +289,9 @@ public class NetProviderTests
     [Fact]
     public async Task Balance_TavilyTakesMinOfPlanAndKey()
     {
+        // 同上：测「计划池与 key 额度取较小值」，不依赖本机 TAVILY_API_KEY。
+        using var key = EnvScope.Set("TAVILY_API_KEY", "tvly-test-0000000000");
+
         // 计划池还剩 700，但这把 key 只剩 200 → 实际可用 200
         const string json = """
         {
