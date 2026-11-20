@@ -34,7 +34,12 @@ jobs:
         run: dotnet --info
 
       - name: Restore
-        run: dotnet restore FatFish.slnx
+        # ★ 必须带 -p:Configuration=Release：FatFish.App.csproj 里
+        #   <RuntimeIdentifier Condition="'$(Configuration)'=='Release'">win-x64</RuntimeIdentifier>
+        #   只在 Release 下生效。按默认（Debug）还原出来的 project.assets.json
+        #   没有 net10.0-windows/win-x64 这个 target，随后的 Release 构建会报
+        #   NETSDK1047。第一次接 CI 就是这么红的。
+        run: dotnet restore FatFish.slnx -p:Configuration=Release
 
       - name: Build
         # 不开 TreatWarningsAsErrors：现有 50+ 条 CA1xxx 是既有的静态分析建议，
