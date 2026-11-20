@@ -1937,3 +1937,47 @@ Alt+Tab 全是通用占位图。这一轮把它补齐，共两版。
 - 打标签 `v2.1.1` 指向本次提交；旧的 `v2.0.1` 标签指向 `6274a1f`（比当时的 main 少一个 README 提交），**不回改历史**
 - `dist/` 两个 zip 重打：Setup 858.7 KB / 10 项，payload 里的 `FatFish.exe` 为 2.1.1（1.52 MB 框架依赖版）
 
+---
+
+### 23.16 安装包合并为「一键」：缺运行时当场下载
+
+**用户原话**：「包里面能不能不装依赖，如果依赖缺失就当场下载依赖」。
+
+原来的发布是**两步**：先下 `Deps-dotnet10` 装 .NET 10 桌面运行时，再下 `Setup` 装本体。
+用户得先理解「运行时」是什么 —— 这不是"轮椅式"。
+
+而「缺就下载」的逻辑**早就写好了**，就在 `install-deps.ps1` 里：
+检测 `Microsoft.WindowsDesktop.App 10.x`，缺了就调微软官方 `dotnet-install.ps1`
+装到 `%LOCALAPPDATA%\Microsoft\dotnet`（免管理员、不改 PATH），装完回读校验。
+问题只是**它被拆成了第二个包**。
+
+改法：把两个包合成一个 —— `install.ps1` 第 0 步直接做这件事。
+
+| 项 | 改前 | 改后 |
+|---|---|---|
+| 发布资产 | Setup + Deps 两个包 | **一个包** `FatFish-2.1.1-Setup-win-x64.zip` |
+| 用户步骤 | 下 2 个包、跑 2 次 | 解压、双击 `install.cmd` |
+| 包体积 | 858.7 KB + 27 KB | **908 KB**（含 `deps\dotnet-install.ps1` 76 KB） |
+| 运行时 | 用户自己去装 | 缺则当场下载（约 55 MB，需联网） |
+| 已装运行时的机器 | 仍需先跑一次 Deps | 直接跳过，只装本体 |
+
+`deps\dotnet-install.ps1` 是微软官方脚本（MIT，归属见 `NOTICE`），**只下载 55 MB 运行时**，
+不进包。所以真缺运行时的情况下总下载量 ≈ 56 MB，反而**小于**自包含单 exe 的 65.6 MB。
+
+**顺带发现并修掉的一个问题**：验证装出来的 exe 时发现 `LegalCopyright` 是空的 ——
+payload 里那个 1.52 MB 的 exe 是在加 Apache 版权信息**之前**构建的。
+已从当前源码重编（`FileVersion=2.1.1.0`、`Copyright 2026 Baimenlou-code`），
+`payload/` 与 `framework-dependent/` 两处同步替换，SHA256 一致。
+
+**验证**（不是看脚本能跑就算）：
+
+| 检查 | 结果 |
+|---|---|
+| 真实安装到临时目录 | 6 步全过，`[OK] 运行时已就绪` → 装好 |
+| 从 zip 解压后双击 `install.cmd` | 11 个文件、安装成功、`Copyright` 已写入 |
+| 强制「缺运行时」分支（`-AssumeNoRuntime`）答 n | **退出码 2**，未创建任何目录、未下载 |
+| `dotnet-install.ps1 -DryRun` | 解析出 `windowsdesktop-runtime-10.0.15-win-x64.zip` |
+| `install.ps1` 语法 | 0 错误；BOM + CRLF 已恢复（PS 5.1 对无 BOM 的中文会乱码） |
+| 测试痕迹清理 | 卸载登记项、开始菜单快捷方式、临时目录全部移除 |
+
+

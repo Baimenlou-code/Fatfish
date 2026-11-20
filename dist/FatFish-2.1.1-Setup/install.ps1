@@ -1,11 +1,19 @@
 ﻿<#
-  FatFish 启动器 2.1.1 —— 安装程序
-  不需要管理员权限：全部装在当前用户目录下。
+  FatFish 启动器 2.1.1 —— 安装程序（一键版）
+
+  ★ 2026-11-20 起：不再需要先装第二个「依赖包」。
+    本脚本会自己检查 .NET 10 桌面运行时；缺了就当场从微软官方脚本下载并安装
+    （约 55 MB，装到 %LOCALAPPDATA%\Microsoft\dotnet，不需要管理员权限、不改 PATH）。
+
+  整个安装过程不需要管理员权限：程序本身也装在当前用户目录下。
 #>
 param(
     [string]$Dir = '',
     [switch]$Desktop,
-    [switch]$NoLaunch
+    [switch]$NoLaunch,
+    # 下面两个只用于自动化验证，普通用户不会用到
+    [switch]$Yes,
+    [switch]$AssumeNoRuntime
 )
 
 $ErrorActionPreference = 'Stop'
@@ -31,7 +39,7 @@ if (-not (Test-Path (Join-Path $Payload $ExeName))) { Die "安装包不完整：
 if ([string]::IsNullOrWhiteSpace($Dir)) { $Dir = Join-Path $env:LOCALAPPDATA $AppName }
 $Dir = [System.IO.Path]::GetFullPath($Dir)
 
-# ---------- 1. 找一个 dotnet ----------
+# ---------- 运行时探测 ----------
 function Find-Dotnet {
     $cands = @(
         (Join-Path $env:LOCALAPPDATA 'Microsoft\dotnet\dotnet.exe'),
@@ -52,30 +60,76 @@ function Test-DesktopRuntime($dotnetExe) {
     } catch { return $false }
 }
 
+# ---------- 1/6 检查运行环境（缺就当场装） ----------
 Write-Host '  [1/6] 检查运行环境 …'
 $dotnet = Find-Dotnet
 $hasRuntime = Test-DesktopRuntime $dotnet
+if ($AssumeNoRuntime) { $hasRuntime = $false }   # 仅用于验证「缺运行时装得对不对」
 
-if (-not $hasRuntime) {
+if ($hasRuntime) {
+    Ok "运行时已就绪（$dotnet）"
+}
+else {
     Write-Host ''
     Warn '这台电脑上没有 .NET 10 桌面运行时（Microsoft.WindowsDesktop.App 10.x）。'
-    Info '本程序是「框架依赖版」，必须先装运行时才能运行。'
+    Info '本程序是「框架依赖版」：体积小，但要靠这个运行时运行。'
     Info ''
-    Info '请这样做：'
-    Info '  1. 找到另一个包：FatFish-2.1.1-Deps-dotnet10'
-    Info '  2. 解压后双击里面的 install-deps.cmd（需要联网，约 55 MB，不需要管理员权限）'
-    Info '  3. 装完后重新双击本安装器的 install.cmd'
-    Info ''
-    Info '或者手动下载：https://dotnet.microsoft.com/download/dotnet/10.0'
-    Info '  （选 “.NET Desktop Runtime 10.x” → Windows x64）'
+    Info '现在会自动下载并安装它：'
+    Info '  · 来源：微软官方 dotnet-install 脚本（packages.microsoft.com）'
+    Info '  · 大小：约 55 MB'
+    Info '  · 位置：%LOCALAPPDATA%\Microsoft\dotnet'
+    Info '  · 不需要管理员权限，不改系统 PATH，不影响其它 .NET 程序'
+    Info '  · 需要联网'
     Write-Host ''
-    $ans = Read-Host '  要现在打开下载页吗？(y/N)'
-    if ($ans -match '^[Yy]') { Start-Process 'https://dotnet.microsoft.com/download/dotnet/10.0' }
+
+    $depsScript = Join-Path $PSScriptRoot 'deps\dotnet-install.ps1'
+
+    if (-not (Test-Path $depsScript)) {
+        Write-Host ''
+        Warn '安装包不完整：缺少 deps\dotnet-install.ps1，无法自动下载运行时。'
+        Info '你可以手动装：https://dotnet.microsoft.com/download/dotnet/10.0'
+        Info '  （选 “.NET Desktop Runtime 10.x” → Windows x64）'
+        Write-Host ''
+        Info '安装已中止，未改动你电脑上的任何文件。'
+        exit 2
+    }
+
+    if (-not $Yes) {
+        $ans = Read-Host '  开始下载并安装？(Y/n)'
+        if ($ans -match '^[Nn]') {
+            Write-Host ''
+            Info '已取消。运行时没装的话程序启动会失败。'
+            Info '稍后可以重新双击 install.cmd，或手动装：https://dotnet.microsoft.com/download/dotnet/10.0'
+            exit 2
+        }
+    }
+
+    $runtimeDir = Join-Path $env:LOCALAPPDATA 'Microsoft\dotnet'
     Write-Host ''
-    Info '安装已中止，未改动你电脑上的任何文件。'
-    exit 2
+    Info '正在下载安装运行时 …（视网速约 1~5 分钟，没有进度条是在解压，别关窗口）'
+    Write-Host ''
+
+    & $depsScript -Channel '10.0' -Runtime 'windowsdesktop' -InstallDir $runtimeDir -NoPath
+    $depsExit = $LASTEXITCODE
+
+    # 重新探测：安装成功与否以「能不能查到运行时」为准，不看退出码
+    $dotnet = Find-Dotnet
+    $hasRuntime = Test-DesktopRuntime $dotnet
+
+    if (-not $hasRuntime) {
+        Write-Host ''
+        Warn "运行时没有装成功（dotnet-install 退出码 $depsExit）。"
+        Info '常见原因：网络被墙 / 代理拦截 / 公司电脑限制访问 packages.microsoft.com'
+        Info ''
+        Info '手动装：https://dotnet.microsoft.com/download/dotnet/10.0'
+        Info '  （选 “.NET Desktop Runtime 10.x” → Windows x64）'
+        Info ''
+        Info '安装已中止，程序本体尚未安装（运行时是它运行的前提）。'
+        exit 2
+    }
+
+    Ok "运行时已装好：$dotnet"
 }
-Ok "运行时已就绪（$dotnet）"
 
 # ---------- 2. 复制程序文件 ----------
 Write-Host ''
@@ -167,6 +221,7 @@ Line '='
 
 if (-not $NoLaunch) {
     Write-Host ''
-    $ans = Read-Host '  现在启动 FatFish 吗？(Y/n)'
+    $ans = 'Y'
+    if (-not $Yes) { $ans = Read-Host '  现在启动 FatFish 吗？(Y/n)' }
     if ($ans -notmatch '^[Nn]') { Start-Process -FilePath $exePath -WorkingDirectory $Dir }
 }

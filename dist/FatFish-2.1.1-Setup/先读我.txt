@@ -1,18 +1,40 @@
 ﻿FatFish 启动器 2.1.1 —— 安装包
 ====================================================
 
-共两个包，按顺序用：
+用法：解压，双击 install.cmd。就这一步。
 
-  1. FatFish-2.1.1-Deps-dotnet10   微软运行时的安装器
-     → 解压，双击 install-deps.cmd（要联网，约 55 MB，不用管理员权限）
-     → 装好后窗口会写「安装成功」
+如果你想连"运行时"都不用管，到这里就够了 —— install.cmd 会：
+  · 检查电脑上有没有 .NET 10 桌面运行时（Microsoft.WindowsDesktop.App 10.x）
+  · 没有的话，当场从微软官方下载并装上（约 55 MB，装到
+    %LOCALAPPDATA%\Microsoft\dotnet，不需要管理员权限，不改系统 PATH）
+  · 已经有了就跳过，只装程序本体
+所以：只需要联网，不需要你提前装任何东西。
 
-  2. FatFish-2.1.1-Setup           程序本体
-     → 解压，双击 install.cmd
-     → 会装到 %LOCALAPPDATA%\FatFish，建好开始菜单快捷方式
-     → 装完把 .env 里的 FATFISH_API_KEY 换成你自己的密钥
+装完之后
+----------------------------------------------------
+会装到 %LOCALAPPDATA%\FatFish，并建好开始菜单快捷方式。
+第一次启动前，打开安装目录里的 .env，把
+    FATFISH_API_KEY=sk-your-key-here
+换成你自己的密钥并保存 —— 不改的话程序启动会亮红灯。
 
-已经装过运行时的电脑，第 1 步可以跳过（install-deps.cmd 会自己看出来）。
+不想联网 / 没网怎么办
+----------------------------------------------------
+手动装运行时（任选一种），然后再双击 install.cmd：
+  · 下载页 https://dotnet.microsoft.com/download/dotnet/10.0
+    选「.NET Desktop Runtime 10.x」→ Windows x64
+  · 或直接下这个文件：
+    https://builds.dotnet.microsoft.com/dotnet/WindowsDesktop/10.0.15/windowsdesktop-runtime-10.0.15-win-x64.zip
 
-卸载：开始菜单同目录的 uninstall.cmd，或「设置 → 应用 → FatFish 启动器」。
-      默认保留你的 .env、会话记录和插件。
+卸载
+----------------------------------------------------
+开始菜单同目录的 uninstall.cmd，或「设置 → 应用 → FatFish 启动器」。
+默认保留你的 .env、会话记录和插件，不会偷偷删你的数据。
+
+包里都是什么
+----------------------------------------------------
+  install.cmd            双击这个
+  install.ps1            安装程序本体（cmd 只是把它叫起来）
+  uninstall.cmd/.ps1     卸载
+  payload\FatFish.exe    程序本体（框架依赖版，约 1.5 MB）
+  deps\dotnet-install.ps1  微软官方运行时下载脚本（MIT，见 NOTICE）
+  LICENSE / NOTICE       Apache-2.0 许可证与第三方归属
