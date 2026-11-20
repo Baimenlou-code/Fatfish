@@ -1880,3 +1880,60 @@ Alt+Tab 全是通用占位图。这一轮把它补齐，共两版。
 | 图标边缘淡晕 | 抠底后边缘 RGB 仍是纯黑，缩小时黑被混进抗锯齿像素。alpha ≤ 17/255（约 6.6%），256px 处约 1 万像素。浅色底上肉眼几乎看不出，观感像轻微投影。修法是把 alpha < 24 归零、边缘一圈改用底板深蓝填充 |
 
 > 📌 本节增订于 **2026-11-20**（v2.1.1 上线前按日补写）。素材逐日核对自 `logs/sessions/`。
+
+---
+
+### 23.15 仓库工程化（上线当天补做）
+
+功能之外，这个仓库在「能被人正确使用」这件事上有几处硬伤，一并处理：
+
+**① `.gitignore` 把 32 个源文件挡在仓库外**
+
+```
+- workspace/          ← 末尾有斜杠但没有前导斜杠
++ /workspace/         ← 锚定仓库根
+```
+
+原写法的 `workspace/` 匹配**任意层级**的 `workspace` 目录；Windows 文件系统大小写不敏感，
+于是 `src/FatFish.Core/Tools/Workspace/` 也中招 —— 32 个工具类（`WsReadTool`、`WsWriteTool`、
+`WsSiteNewTool`…）**从 v2.0.1 起就没进过仓库**。任何人 clone 下来必然编译失败，
+而现场没有任何报错，只有 20 天后有人认真比对文件清单才被发现。
+
+**② 许可证：Apache-2.0**
+
+| 文件 | 内容 |
+|---|---|
+| `LICENSE` | 官方原文 11,358 字节，**一个字没改**（附录占位符保留，GitHub 靠文本指纹识别） |
+| `NOTICE` | 项目版权行 + 第三方组件归属（唯一的第三方代码是微软的 `dotnet-install.ps1`，MIT，两处副本） |
+| `README.md` | 新增「八、许可证」一节，含 AI 参与说明 |
+| 安装包 | `payload/` 内附 `LICENSE` / `NOTICE`，满足 §4(a)「分发必须带许可证副本」 |
+| `Directory.Build.props` | `Copyright` + `PackageLicenseExpression=Apache-2.0` |
+
+**③ CI：这个仓库原本没有任何自动校验**
+
+新增 `.github/workflows/build.yml`（windows-latest，restore → build → test → 上传 trx）
+与 `.github/dependabot.yml`（nuget + actions，每周）。
+
+接上 CI 的头两次都是红的，两次都与产品代码无关：
+
+| 失败 | 根因 | 修法 |
+|---|---|---|
+| `NETSDK1047`：assets 缺 `net10.0-windows/win-x64` | `FatFish.App.csproj` 的 `RuntimeIdentifier` 只在 `Release` 下生效，而 restore 按默认 Debug 跑 | restore 加 `-p:Configuration=Release`（删 `obj` 后本地完整复现验证） |
+| 4 条用例 | `Balance_*` 依赖进程环境里的 API key；两条中文用例依赖控制台代码页（英文版 runner 是 437） | 新增 `TestEnvironment.cs`：`EnvScope` 在用例内注入假 key 并恢复；`CjkFact` 在代码页表示不了中文时**显式 Skip**，而不是把断言改弱 |
+
+> ⚠️ 写 `CjkFact` 第一版时用了 `Encoding.GetEncoding(Console.OutputEncoding.CodePage)` ——
+> .NET Core 未注册代码页提供程序时连 936 都取不到，于是在**简中机器上也误判为不支持**，
+> 987 条用例里 2 条凭空变成 Skip。改用 `ProcessEncoding.Oem`（它的静态构造会 RegisterProvider）
+> 之后才与线上一致。
+
+**④ 分支保护**
+
+`main` 此前无保护（可直接强推、可删除）。现设为：必需状态检查 `build & test (windows)`、
+禁止强推、禁止删除；`enforce_admins=false` 以便本人仍可直接推送。回滚方式是用同一接口 PUT 空配置。
+
+**⑤ 版本与标签**
+
+- 版本号统一到 **2.1.1**（`Directory.Build.props`、README、CHANGELOG、`dist/` 两个安装包及内部脚本）
+- 打标签 `v2.1.1` 指向本次提交；旧的 `v2.0.1` 标签指向 `6274a1f`（比当时的 main 少一个 README 提交），**不回改历史**
+- `dist/` 两个 zip 重打：Setup 858.7 KB / 10 项，payload 里的 `FatFish.exe` 为 2.1.1（1.52 MB 框架依赖版）
+

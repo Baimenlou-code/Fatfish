@@ -12,6 +12,16 @@ updates:
       prefix: "deps"
     labels:
       - dependencies
+    ignore:
+      # ★ xunit.runner.visualstudio 4.x 只面向 xunit.v3；本项目刻意停在 xunit v2
+      #   （见 FatFish.Core.Tests.csproj 里的说明）。让它自动升级会把 987 条用例
+      #   全部变成「发现不了」，而 CI 只会报一个语焉不详的 0 tests。
+      #   真要上 v3 时手动改，别让机器人替你决定测试框架换代。
+      - dependency-name: "xunit.runner.visualstudio"
+        update-types: ["version-update:semver-major"]
+      # xunit 3.x 同理：v2 → v3 是换代，不是补丁。
+      - dependency-name: "xunit"
+        update-types: ["version-update:semver-major"]
 
   # workflow 里用的 action 版本也需要跟着升，否则会被逐步弃用。
   - package-ecosystem: github-actions
