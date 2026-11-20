@@ -1980,4 +1980,46 @@ payload 里那个 1.52 MB 的 exe 是在加 Apache 版权信息**之前**构建�
 | `install.ps1` 语法 | 0 错误；BOM + CRLF 已恢复（PS 5.1 对无 BOM 的中文会乱码） |
 | 测试痕迹清理 | 卸载登记项、开始菜单快捷方式、临时目录全部移除 |
 
+#### 23.16.1 深挖下载链路（同一晚补做）
+
+第一版把「下载」这一步交给官方的 `dotnet-install.ps1`。实测**在本机网络上会挂死**：
+
+```
+dotnet-install: Downloading "aka.ms" link https://builds.dotnet.microsoft.com/.../windowsdesktop-runtime-10.0.15-win-x64.zip
+（此后 2.5 分钟零字节、零临时文件，进程仍在）
+```
+
+三条对照实验把原因钉住：
+
+| 方式 | 结果 |
+|---|---|
+| `Invoke-WebRequest -Method Head` | **200，1.8 秒**，`Content-Length=39170881` |
+| `Invoke-WebRequest -OutFile`（GET） | **150 秒超时，一个字节没落盘** |
+| `curl.exe` | 同一 URL，60 秒拿到 **25 MB**（约 420 KB/s） |
+| `WebClient` | 能下，但只 ~80 KB/s |
+
+即「HEAD 通、PS 的 GET 卡死、curl 正常」。中文网络下这不是孤例，
+所以不能把用户的安装成败押在 `Invoke-WebRequest` 上。
+
+改法：**自己下载，官方脚本退为兜底**。
+
+1. `$ProgressPreference = 'SilentlyContinue'`（进度条在重定向下会拖慢甚至假死）
+2. 下载地址用 `https://aka.ms/dotnet/10.0/windowsdesktop-runtime-win-x64.zip` ——
+   实测 302 到当前补丁版（今日 `10.0.15`），curl/WebClient 都会自动跟随；
+   比「解析 `-DryRun` 输出」可靠（`dotnet-install` 用 `Write-Host` 打印，PS 5.1 里 `2>&1` 根本抓不到），
+   也比「读 `productVersion.txt`」可靠（那条路径实测 `BlobNotFound`）
+3. 依次尝试 **curl.exe → WebClient → 官方脚本**，全失败才报错并打印手动地址
+
+**自测时踩到的第二个坑**：curl 把进度表写到 stderr，而脚本设了
+`$ErrorActionPreference='Stop'` —— 原生程序写 stderr 会被 PowerShell 当成
+`NativeCommandError` **直接终止脚本**（临时 zip 连创建都没有）。
+修法：curl 用 `-sS` 关掉进度表，并在调用处局部把 `ErrorActionPreference` 降为 `Continue`、`finally` 还原。
+
+修好之后复测：缺运行时分支正确打印提示与 `aka.ms` 地址 → curl 真正启动 → 不再崩溃。
+**但 39 MB 没能在这台机器上下完**：CDN 当晚被限速到 ~25 KB/s（需半小时以上），
+所以「下载完整跑通 → 解压 → 检测到运行时」这一段**尚未端到端验证**，
+只验证到「curl 能拿到数据且不中断」。这一点如实留在这里，上线前应当换个网络补测。
+
+体积口径同步修正：运行时 zip 实际 **39.1 MB**（原按 55 MB 估算，那是解压后的大小）。
+
 
