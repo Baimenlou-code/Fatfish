@@ -78,6 +78,28 @@ FatFish.App.csproj 的 RuntimeIdentifier 只在 Release 下生效，
 本地跑测试时注意：有两条用例只在**中文代码页**下有意义（`CjkFact`），
 英文 Windows 上会显示 Skip —— 这是设计如此，不是漏测。
 
+### 环境前提：SDK 在用户目录，`Program Files` 那个没有 SDK
+
+`build.cmd` / `deploy.cmd` 开头已经设好了下面两行，**用它们就不会踩**：
+
+```bat
+set "DOTNET_ROOT=%LOCALAPPDATA%\Microsoft\dotnet"
+set "PATH=%LOCALAPPDATA%\Microsoft\dotnet;%PATH%"
+```
+
+但只要**绕过脚本直接敲 `dotnet`**（临时验证、单 csproj 构建、CI 结果本地复现），
+就必须自己补这两行，否则会看到：
+
+```
+A compatible .NET SDK was not found.
+Requested SDK version: 10.0.100
+Installed SDKs: No .NET SDKs were found.
+```
+
+原因不是没装 SDK —— `where dotnet` 命中的 `C:\Program Files\dotnet\dotnet.exe`
+里只有运行时，而 Windows 解析 PATH 是「系统在前、用户在后」；SDK 实际在
+`%LOCALAPPDATA%\Microsoft\dotnet\sdk\<版本>`（本机 10.0.403）。2026-11-21 为此白跑过一次构建验证。
+
 ## 五、不要提交的东西
 
 | 路径 | 原因 |
