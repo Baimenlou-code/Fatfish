@@ -48,8 +48,8 @@
       路径脱敏（2026-11-21）：
       编译器默认把源文件的绝对路径写进 PDB 的 RSDS 记录，发布出来的
       FatFish.exe 里就带着构建机的目录结构 —— 实测能在二进制里读到
-      E:\FATFISH\fatfish\src\...\obj\Release\...，等于把开发者的本机布局
-      随安装包发给每一个下载者。
+      类似 <盘符>:\<仓库根>\src\...\obj\Release\... 的绝对路径，
+      等于把开发者的本机布局随安装包发给每一个下载者。
       把仓库根映射成 /_/ 之后重新编译，二进制里只剩相对路径。
     -->
     <PathMap>$(MSBuildThisFileDirectory)=/_/</PathMap>
