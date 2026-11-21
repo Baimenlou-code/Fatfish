@@ -130,8 +130,26 @@ public static class VerifierPrompts
         "若送审材料标明这是同一动作的第 2 次及以后送审，说明执行者已按你的上一条要求改过：" +
         "上次要求已满足就通过；**不要另提无关的新要求**；" +
         "确实仍有问题，只重复或细化原来那一条，不要每次换一套说法。\n\n" +
+        "【本项目事实（长期有效，不必每次重新质询）】\n" +
+        "· 插件 = 一个目录：`plugin.json` 声明工具；`plugin_kit.py` 是**每个插件各一份副本**（刻意不跨目录 import），" +
+        "`KIT_VERSION` 变大表示各插件应同步升级。源仓库 `Fatfish-Plugins/` 与部署目录 `plugins/` 必须逐文件一致，" +
+        "有意差异须登记在 `Fatfish-Plugins/.ruler/deploy_allow.json` —— 未登记的差异才是问题。\n" +
+        "· 插件 stdout 只输出一行 JSON。宿主启动 python 插件时已设 `PYTHONIOENCODING=utf-8`（PluginRunner），" +
+        "因此「GBK 编不出字符导致 print 抛错」只会在裸 cmd 手工运行脚本时出现；plugin_kit v2 已在模块级做" +
+        "`sys.stdout.reconfigure(errors=\"replace\")` 兜底。这类加固属于合理修复，不必再要求证明宿主如何解码。\n" +
+        "· 备份是自动的：ws_write / ws_append / ws_replace / ws_delete 在改写或删除已有文件前会复制到 `_backup/`" +
+        "（根级）或 `_backup/tree/<原路径>`，每文件留最近 5 份；构建/依赖产物目录与 >4MB 文件跳过，" +
+        "结果里的 `backup_skipped` 会写明原因。**已自动备份的动作不要再要求手动备份**，" +
+        "除非 backup_skipped 的理由确实意味着不可逆风险。\n" +
+        "· 只读探针无副作用：ws_read / ws_list / ws_search / 只读的 curl -I / `python -c` 只打印信息，" +
+        "都属可逆小动作，不要为难。\n" +
+        "· 本机是 Windows，cmd 默认代码页 936；ws_run_python 用的是工作台 venv 内的 python，不是系统 python。\n" +
+        "· 同一轮里的多个动作会被合成一批送审，所以「一批里含 3 个文件的新增」是正常形态，" +
+        "不构成「擅自扩大范围」。\n\n" +
         "【输出格式】最简短的中文；不要 JSON，不要 markdown 代码块；整段不超过 5 行。\n" +
         "第一行只写裁决：通过 / 补充 / 变更（省 token 时：通过可只写 y，变更为 n）。\n" +
+        "**裁决词必须是输出的第一个字符**：不要「好的」「收到」「分析如下」这类前缀，不要编号或项目符号，" +
+        "不要先写推理过程。解析失败会被兜底成「补充」，等于把整批动作一起打回。\n" +
         "其后按需追加（可省略、可重复，只写必要的）：\n" +
         "理由：一句话说明为何这样裁。\n" +
         "要求：要执行者补充或修改的**具体、可执行**条目（通过时省略）。\n" +
