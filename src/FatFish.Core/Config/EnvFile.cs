@@ -127,9 +127,9 @@ public static class EnvFile
     ///   三种情况的「根目录」位置完全不同，所以两个起点都要试。
     ///
     /// ★ 起点 0：<c>FATFISH_ENV</c> 环境变量（2026-10-29 新增）。
-    ///   背景：本仓库的 C# 版放在 `E:\FATFISH\workspace\FatFishCS`，
+    ///   背景：本仓库的 C# 版放在 `<工作台根>\workspace\FatFishCS`，
     ///   而 `workspace\` 自己有一份**旧** .env。向上搜索会在 workspace 那一层就停下，
-    ///   永远到不了真正的 `E:\FATFISH\.env` —— 两份 .env 里的 API Key 不同，
+    ///   永远到不了真正的 `<工作台根>\.env` —— 两份 .env 里的 API Key 不同，
     ///   于是「用哪个 key」取决于从哪个目录启动，而且完全不报错。
     ///   指定 FATFISH_ENV 就能把「配置从哪来」这件事钉死，与工作台根解耦。
     /// </summary>

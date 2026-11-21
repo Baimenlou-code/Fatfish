@@ -67,7 +67,7 @@ public sealed class PluginSlotService
 
     private readonly string _root;
 
-    /// <param name="root">工作台根目录（E:\FATFISH）。桥接在 workspace/qq_bridge，日志在 logs/。</param>
+    /// <param name="root">工作台根目录。桥接在 workspace/qq_bridge，日志在 logs/。</param>
     public PluginSlotService(string root)
     {
         _root = root ?? throw new ArgumentNullException(nameof(root));

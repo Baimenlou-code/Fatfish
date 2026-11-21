@@ -2624,7 +2624,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged, IAgentObserver
             + "内核：" + KernelStatus + "\n"
             + "工作台：" + (_guard?.Root ?? "未加载") + "\n"
             + "模型：" + (string.IsNullOrEmpty(ModelText) ? "未配置" : ModelText) + "\n\n"
-            + "原 Python 版仍在 E:\\FATFISH 正常运行，本版为并行迁移分支。",
+            + "原 Python 版仍在原位置正常运行，本版为并行迁移分支。",
             "关于肥鱼", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 

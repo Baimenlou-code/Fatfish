@@ -1791,7 +1791,7 @@ GUI 父进程启动 console 子进程时 Windows 不会自动分配控制台，�
 且压过继承来的旧值」）、`ApplyStartup_WithoutPreset_UsesEnvFileAndWarnsNothing`。
 
 实测 CLI `--selftest`：
-`配置文件 E:\FATFISH\.env（载入 1 项）｜激活预设：deepseek-flash (api.deepseek.com)`、
+`配置文件 <工作台根>\.env（载入 1 项）｜激活预设：deepseek-flash (api.deepseek.com)`、
 `key = ***eb70`、`base=https://api.deepseek.com`、`model=deepseek-flash`。
 
 > 预设文件（`config/presets/*.env`）**不入库**：里面是明文 key，仓库里也没有 `config/` 目录。

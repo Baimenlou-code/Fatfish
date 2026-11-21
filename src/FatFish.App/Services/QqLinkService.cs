@@ -56,7 +56,7 @@ public sealed record QqTurnReply(string Text, bool Send);
 ///   否则写进去永远没人来取（旧版实测：插话在盘里躺了一整晚）。</item>
 /// <item>单条消息里的路径必须<b>在进模型之前</b>中和掉，只放行桥接落在
 ///   <c>data/link/media/</c> 里的真附件 —— 否则群里任何人打一行
-///   <c>@E:\FATFISH\workspace\.env</c> 就能让我们把密钥读进上下文再贴进群。</item>
+///   <c>@<工作台根>\workspace\.env</c> 就能让我们把密钥读进上下文再贴进群。</item>
 /// </list>
 /// </summary>
 public sealed class QqLinkService : IAsyncDisposable
@@ -640,7 +640,7 @@ public sealed class QqLinkService : IAsyncDisposable
     /// <para>
     /// 这是堵一个<b>真洞</b>，不是洁癖：模型解析 <c>@路径</c> 是自动的，
     /// 而那条路不经过工具审批。群里任何人打一句
-    /// <c>@E:\FATFISH\workspace\.env</c>，就会把密钥读进上下文 —— 再被要求复述，就贴进群了。
+    /// <c>@<工作台根>\workspace\.env</c>，就会把密钥读进上下文 —— 再被要求复述，就贴进群了。
     /// </para>
     /// </summary>
     private (string Cleaned, int Blocked, List<string> Images) MediaGuard(string text)

@@ -23,7 +23,7 @@ namespace FatFish.App;
 ///     <see cref="OnPluginCommandPreviewKeyDown"/> 里的说明 —— 同样不需要改大文件。
 ///
 /// 与主窗口共享的实例成员：
-///   · <c>_workspaceSession</c>  取工作台根（E:\FATFISH）
+///   · <c>_workspaceSession</c>  取工作台根
 ///   · <c>_plugins</c>           PluginHost（真实插件的装载中心）
 ///   · <c>Log(string)</c>        写进底部日志面板
 ///   · <c>StatusText</c>         状态栏文字（绑定属性）

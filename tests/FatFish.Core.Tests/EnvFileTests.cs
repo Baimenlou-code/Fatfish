@@ -183,9 +183,9 @@ public class EnvFileTests : IDisposable
     /// <summary>
     /// FATFISH_ENV 指定了路径，就**只**用它，不再向上搜索。
     ///
-    /// 这条守的是一个真实踩到的坑：`E:\FATFISH\workspace\` 下有一份旧 .env，
+    /// 这条守的是一个真实踩到的坑：`<工作台根>\workspace\` 下有一份旧 .env，
     /// 而 C# 项目在 `workspace\FatFishCS\`，于是向上搜索总在 workspace 那一层停下，
-    /// 永远读不到 `E:\FATFISH\.env`。两份 .env 的 API Key 不同，结果是
+    /// 永远读不到 `<工作台根>\.env`。两份 .env 的 API Key 不同，结果是
     /// 「从哪个目录启动，就连到哪个账号」，而且一声不响。
     /// </summary>
     [Fact]
